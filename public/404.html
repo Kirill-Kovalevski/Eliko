@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+  <head>
+    <title>redirecting</title>
+    <meta http-equiv="refresh" content="0; url=/Eliko/">
+    <script>
+      // client-side redirect to keep path after refresh
+      (function() {
+        var redirect = '/Eliko/' + (location.pathname + location.search + location.hash)
+          .replace(/^\/Eliko\//, '')
+        location.replace(redirect)
+      })();
+    </script>
+  </head>
+  <body></body>
+</html>
