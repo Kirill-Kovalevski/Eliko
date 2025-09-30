@@ -1,4 +1,4 @@
-/* FULL corrected Game.tsx */
+/* FULL Game.tsx — smooth arrows, twin-stick mobile, bilingual HUD, XP/Level progress */
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import type { Entity, PlayerState, WeaponId, PowerUpKind } from './types'
 import { clamp, lerp, rnd, id, aabb } from './utils'
@@ -6,7 +6,7 @@ import { useInput } from './useInput'
 import { synth } from './audio'
 import { makeLevel, STAGE_LENGTH } from './levels'
 
-/* ========= Types & small helpers ========= */
+/* ========= Types & helpers ========= */
 type EnemyKind = 'jelly'|'squid'|'manta'|'nautilus'|'puffer'|'crab'
 type PU = Extract<PowerUpKind,'shield'|'speed'|'heal'|'weapon'|'drone'|'haste'>
 
@@ -130,34 +130,38 @@ function crabShape(ctx:CanvasRenderingContext2D,w:number,h:number){
 }
 
 /* ========= Component ========= */
-export default function Game(){
+export default function Game(props: {
+  lang: 'he' | 'en'
+  onProgress?: (xp: number, xpNeeded: number, level: number, didLevelUp: boolean) => void
+}) {
   const canvasRef = useRef<HTMLCanvasElement|null>(null)
   const rafRef = useRef<number|null>(null)
   const frame = useRef(0)
 
   const [paused,setPaused] = useState(false)
   const [gameOver,setGameOver] = useState(false)
-  const [showHelp,setShowHelp] = useState(true)
   const [score,setScore] = useState(0)
   const [mute,setMute] = useState(false)
   const [stage,setStage] = useState(1)
   const [bossActive,setBossActive] = useState(false)
 
-  // Input: keyboard + our touch overrides
+  // Input (WASD + Arrows + Space) + our touch overrides
   const { fire, ax, ay } = useInput()
 
   // Canvas sizing
   const W = useRef(760), H = useRef(980), dpr = useRef(1)
 
   // Game state refs
-  const level = useRef(makeLevel(stage))
+  const levelCfg = useRef(makeLevel(stage))
   const spawns = useRef(0)
   const player = useRef<PlayerState>({ x:140, y:360, vx:0, vy:0, maxSpeed:7.5, radius:BASE_R, hp:6, shieldMs:0, weapon:'blaster' })
   const targetRadius = useRef(BASE_R)
   const weaponLevel = useRef(0)
 
+  // Progress (reported to App)
   const xp = useRef(0)
-  const xpToNext = useRef(40)
+  const xpToNext = useRef(40) // App should start with same default
+  const playerLevel = useRef(1) // report this to App
   const avatarHue = useRef(38)
   const xpOrbsRef = useRef<Array<{id:number;x:number;y:number;vx:number;vy:number;life:number}>>([])
 
@@ -183,7 +187,7 @@ export default function Game(){
   const killStreak = useRef(0)
   const bubblesRef = useRef<{x:number;y:number;r:number;v:number}[]>([])
 
-  // === Mobile twin-stick refs (now INSIDE the component, as required) ===
+  // === Mobile twin-stick refs (local to component) ===
   const moveTouchId = useRef<number|null>(null)
   const aimTouchId  = useRef<number|null>(null)
   const moveOrigin  = useRef<{x:number;y:number}|null>(null)
@@ -191,9 +195,6 @@ export default function Game(){
   const touchAx = useRef(0), touchAy = useRef(0)
   const aimAngle = useRef(0)
   const touchFiring = useRef(false)
-
-  // Tutorial (light overlay)
-  const tutorialTimer = useRef(0)
 
   /* ======== Layout / resize ======== */
   useEffect(()=>{
@@ -213,20 +214,19 @@ export default function Game(){
     return ()=>window.removeEventListener('resize',onResize)
   },[])
 
-  /* ======== Keyboard toggles ======== */
+  /* ======== Keyboard toggles (no on-screen instructions) ======== */
   useEffect(()=>{
     const onKey=(e:KeyboardEvent)=>{
       const k=e.key.toLowerCase()
       if(k==='p') setPaused(p=>!p)
       if(k==='m'){ setMute(m=>!m); synth.mute(!mute) }
-      if(showHelp && (k===' '||k==='enter')) setShowHelp(false)
       if(gameOver && (k===' '||k==='enter')) softReset()
     }
     window.addEventListener('keydown',onKey)
     return ()=>window.removeEventListener('keydown',onKey)
-  },[mute,showHelp,gameOver])
+  },[mute,gameOver])
 
-  /* ======== Touch & mouse aim handlers ======== */
+  /* ======== Touch & mouse aim handlers (twin-stick) ======== */
   useEffect(()=>{
     const c = canvasRef.current!
     const getLocal = (ev: Touch | MouseEvent) => {
@@ -336,11 +336,6 @@ export default function Game(){
 
       frame.current++
 
-      // tutorial auto-advance (~2.2s per step)
-      if (showHelp && frame.current < 600) {
-        tutorialTimer.current += 16
-      }
-
       const ts=(hasteMs.current>0?1.35:1)
       if(hasteMs.current>0) hasteMs.current-=16
       if(rapidMs.current>0) rapidMs.current-=16
@@ -349,7 +344,7 @@ export default function Game(){
 
       const accel=0.2
 
-      // Axes: keyboard base
+      // Axes: keyboard base (WASD + ARROWS from useInput)
       let axEff = ax
       let ayEff = ay
       // If phone joystick active, override keyboard axes
@@ -358,6 +353,7 @@ export default function Game(){
         ayEff = touchAy.current
       }
 
+      // Smooth movement (lerped velocity)
       player.current.vx=lerp(player.current.vx, axEff*player.current.maxSpeed,accel)
       player.current.vy=lerp(player.current.vy, ayEff*player.current.maxSpeed,accel)
       player.current.x=clamp(player.current.x+player.current.vx, PADDING+player.current.radius, W.current-PADDING-player.current.radius)
@@ -397,7 +393,7 @@ export default function Game(){
       }
 
       // spawns
-      const lv=level.current
+      const lv=levelCfg.current
       const spawnEvery=Math.max(12,Math.floor(lv.spawnEvery*(hasteMs.current>0?0.85:1)))
       if(!bossActive && frame.current%Math.floor(spawnEvery)===0){
         const y=rnd(PADDING+60,H.current-PADDING-60)
@@ -523,7 +519,7 @@ export default function Game(){
             if(!mute) synth.power(); setScore(s=>s+500)
             particlesRef.current.push(...explode(bossRef.current.x,bossRef.current.y,'#a78bfa',46))
             bossRef.current=null; setBossActive(false); setStage(s=>s+1)
-            level.current=makeLevel(stage+1)
+            levelCfg.current=makeLevel(stage+1)
             drones.current.push({phase:Math.random()*Math.PI*2})
             for(let k=0;k<6;k++)
               powerupsRef.current.push({id:id(),x:W.current-260+k*44,y:rnd(PADDING+80,H.current-PADDING-80),kind:(Math.random()<0.85?'weapon':'drone'),payload:pickWeaponWeighted(stage+1)})
@@ -563,10 +559,13 @@ export default function Game(){
       xpOrbsRef.current = xpOrbsRef.current.filter(o=>o.life>0)
 
       // level ups
+      let didLevelUp = false
       while(xp.current >= xpToNext.current){
         xp.current -= xpToNext.current
         xpToNext.current = Math.floor(xpToNext.current * 1.35)
         avatarHue.current = (avatarHue.current + 28) % 360
+        playerLevel.current += 1
+        didLevelUp = true
         if(weaponLevel.current < WEAPON_TIER.length-1) weaponLevel.current++
         for(let i=0;i<24;i++){
           particlesRef.current.push({ id:id(), x:player.current.x+rnd(-40,40), y:player.current.y-120+rnd(-20,20),
@@ -587,13 +586,18 @@ export default function Game(){
       // bubbles bg
       for(const bb of bubblesRef.current){ bb.y-=bb.v; if(bb.y<-10){ bb.x=rnd(0,W.current); bb.y=H.current+rnd(10,80); bb.r=rnd(2,6); bb.v=rnd(0.4,1.2) } }
 
+      // report progress to App (for bars)
+      if (props.onProgress) {
+        props.onProgress(xp.current, xpToNext.current, playerLevel.current, didLevelUp)
+      }
+
       draw(ctx)
     }
 
     rafRef.current=requestAnimationFrame(loop)
     return ()=>{ if(rafRef.current) cancelAnimationFrame(rafRef.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[paused,mute,stage,ax,ay,fire,gameOver,showHelp])
+  },[paused,mute,stage,ax,ay,fire,gameOver])
 
   /* ======== Picks & colors ======== */
   const pickWeaponWeighted=(st:number):WeaponId=>{
@@ -612,13 +616,13 @@ export default function Game(){
 
   /* ======== Reset ======== */
   const softReset=()=>{
-    setGameOver(false); setShowHelp(true)
+    setGameOver(false)
     player.current={x:140,y:360,vx:0,vy:0,maxSpeed:7.5,radius:BASE_R,hp:6,shieldMs:0,weapon:'blaster'}
     weaponLevel.current=0; rapidMs.current=0; hasteMs.current=0; drones.current=[]
     particlesRef.current=[]; enemiesRef.current=[]; powerupsRef.current=[]; bossRef.current=null
-    level.current=makeLevel(stage); spawns.current=0; hitFlash.current=0; dmgBounce.current=0; shake.current=0; killStreak.current=0
+    levelCfg.current=makeLevel(stage); spawns.current=0; hitFlash.current=0; dmgBounce.current=0; shake.current=0; killStreak.current=0
     setScore(0); enemiesKilled.current=0; boostsCollected.current=0
-    xp.current=0; xpToNext.current=40; avatarHue.current=38
+    xp.current=0; xpToNext.current=40; playerLevel.current=1; avatarHue.current=38
     killsSincePower.current=0; killsNeeded.current=10; xpOrbsRef.current=[]
   }
 
@@ -636,35 +640,6 @@ export default function Game(){
       grad.addColorStop(0.5,'rgba(255,255,255,0.45)')
       grad.addColorStop(1,'rgba(255,255,255,0)')
       ctx.fillStyle=grad; ctx.fillRect(0,y-60,w,120)
-
-      // Tutorial overlay (first 10s)
-      if (showHelp && frame.current < 600) {
-        ctx.save()
-        ctx.globalAlpha = 0.9
-        ctx.fillStyle = "rgba(0,0,0,0.55)"
-        ctx.fillRect(0, 0, W.current, H.current)
-        ctx.globalAlpha = 1
-        ctx.strokeStyle = "yellow"
-        ctx.lineWidth = 6
-        if (frame.current < 300) {
-          ctx.beginPath()
-          ctx.arc(player.current.x, player.current.y, player.current.radius*3, 0, Math.PI*2)
-          ctx.stroke()
-          ctx.fillStyle = "white"
-          ctx.font = "24px Rubik, sans-serif"
-          ctx.textAlign = "center"
-          ctx.fillText("גרור כדי לזוז", player.current.x, player.current.y - 60)
-        } else {
-          ctx.beginPath()
-          ctx.arc(player.current.x+50, player.current.y, 70, 0, Math.PI*2)
-          ctx.stroke()
-          ctx.fillStyle = "white"
-          ctx.font = "24px Rubik, sans-serif"
-          ctx.textAlign = "center"
-          ctx.fillText("גע/י בצד ימין כדי לירות", W.current/2, player.current.y - 80)
-        }
-        ctx.restore()
-      }
     }
     ctx.globalAlpha=1
     if(hitFlash.current>0){ ctx.fillStyle=`rgba(239,68,68,${0.14+0.08*Math.sin(frame.current*0.5)})`; ctx.fillRect(0,0,w,h) }
@@ -792,19 +767,25 @@ export default function Game(){
 
     if(shake.current>0){ ctx.restore() }
 
-    // HUD
+    // HUD (bilingual)
+    const L = props.lang === 'he'
+      ? {
+          score: 'ניקוד', stage: 'שלב', boss: 'בוס', weapon: 'נשק',
+          fell: 'נפלת במעמקים…', again: 'לחצו רווח / אנטר כדי לשחק שוב',
+          defeated: 'אויבים שהובסו', boosts: 'בוסטרים שנאספו',
+        }
+      : {
+          score: 'Score', stage: 'Stage', boss: 'Boss', weapon: 'Weapon',
+          fell: 'You fell into the depths…', again: 'Press Space / Enter to play again',
+          defeated: 'Enemies defeated', boosts: 'Boosters collected',
+        }
+
     ctx.fillStyle='#fff'; ctx.font='800 18px system-ui'; ctx.textAlign='right'
-    ctx.fillText(`ניקוד ${score}`, w-12, 26)
-    ctx.fillText(`שלב ${stage}${bossRef.current?' • בוס':''}`, w-12, 48)
-    ctx.fillText(`נשק ${p.weapon.toUpperCase()}`, w-12, 70)
+    ctx.fillText(`${L.score} ${score}`, w-12, 26)
+    ctx.fillText(`${L.stage} ${stage}${bossRef.current?' • '+L.boss:''}`, w-12, 48)
+    ctx.fillText(`${L.weapon} ${p.weapon.toUpperCase()}`, w-12, 70)
 
-    const xpW=Math.min(w-160, 520), xpLeft=(w-xpW)/2, xpTop=12
-    ctx.fillStyle='rgba(0,0,0,.35)'; roundedRect(ctx,xpLeft, xpTop, xpW, 10, 6); ctx.fill()
-    const xpPct=Math.max(0,Math.min(1, xp.current/xpToNext.current))
-    const xpg=ctx.createLinearGradient(xpLeft,xpTop,xpLeft+xpW,xpTop)
-    xpg.addColorStop(0,`hsl(${avatarHue.current},90%,60%)`); xpg.addColorStop(1,'#fde047')
-    roundedRect(ctx,xpLeft, xpTop, xpW*xpPct, 10, 6); ctx.fillStyle=xpg; ctx.fill()
-
+    // lives
     ctx.textAlign='start'
     for(let i=0;i<MAX_LIVES;i++){
       const x=12+i*20,y=26
@@ -813,9 +794,9 @@ export default function Game(){
     }
 
     if(gameOver){
-      drawOverlay(ctx, w, h, 'נפלת במעמקים…',
-        [`ניקוד: ${score}`, `אויבים שהובסו: ${enemiesKilled.current}`, `בוסטרים שנאספו: ${boostsCollected.current}`],
-        'לחצו רווח / כניסה כדי לשחק שוב')
+      drawOverlay(ctx, w, h, L.fell,
+        [`${L.score}: ${score}`, `${L.defeated}: ${enemiesKilled.current}`, `${L.boosts}: ${boostsCollected.current}`],
+        L.again)
     }
   }
 
@@ -829,42 +810,11 @@ export default function Game(){
     ctx.textAlign='start'
   }
 
-  /* ======== Small UI bar (unchanged) ======== */
-  function InstructionBar({
-    paused, setPaused, mute, setMute, showHelp, setShowHelp, gameOver, softReset
-  }:{
-    paused:boolean; setPaused:Dispatch<SetStateAction<boolean>>;
-    mute:boolean; setMute:Dispatch<SetStateAction<boolean>>;
-    showHelp:boolean; setShowHelp:Dispatch<SetStateAction<boolean>>;
-    gameOver:boolean; softReset:()=>void;
-  }) {
-    return (
-      <div className="instr-wrap" dir="rtl">
-        <div className="instr-aura" aria-hidden={true} />
-        <div className="instr-bar glass">
-          <span className="chip chip-info"><span className="dot" /> תנועה: WASD / גרירה</span>
-          <span className="chip chip-info"><span className="dot" /> ירי: רווח / החזק</span>
-          <button className="chip chip-ghost" onClick={()=>setPaused(p=>!p)} title="P">{paused ? 'המשך' : 'השהה (P)'}</button>
-          <button className="chip chip-ghost" onClick={()=>{ setMute(m=>!m); synth.mute(!mute) }} title="M">{mute ? 'בטל השתקה (M)' : 'השתק (M)'}</button>
-          {gameOver ? (
-            <button className="chip chip-primary" onClick={softReset}>נסה/י שוב</button>
-          ) : (
-            showHelp && (<button className="chip chip-primary" onClick={()=>setShowHelp(false)}>התחל/י</button>)
-          )}
-        </div>
-        <div className="instr-underline" />
-      </div>
-    )
-  }
-
   return (
-    <div className="game" dir="rtl">
-      <InstructionBar
-        paused={paused} setPaused={setPaused}
-        mute={mute} setMute={setMute}
-        showHelp={showHelp} setShowHelp={setShowHelp}
-        gameOver={gameOver} softReset={softReset}
-      />
+    <div className="game" dir={props.lang==='he'?'rtl':'ltr'}>
+      {/* visual joystick halos (input handled on the canvas) */}
+      <div className="joy left" />
+      <div className="joy right" />
       <canvas
         className="canvas"
         ref={canvasRef}
