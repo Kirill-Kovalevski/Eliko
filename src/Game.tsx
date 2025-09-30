@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Entity, PlayerState, WeaponId, PowerUpKind } from './types'
 import { clamp, lerp, rnd, id, aabb } from './utils'
 import { useInput } from './useInput'
+import { useThumbstick } from './useThumbstick'
 import { synth } from './audio'
 import { makeLevel, STAGE_LENGTH } from './levels'
 
@@ -128,7 +129,6 @@ function drawSeaDragonBullet(ctx: CanvasRenderingContext2D, x: number, y: number
   ctx.shadowBlur = 0; ctx.fillStyle = 'hsl(190, 95%, 70%)'
   ctx.beginPath(); ctx.moveTo(-w*0.15, 0); ctx.lineTo(-w*0.45,  h*0.42); ctx.lineTo( w*0.05,   h*0.18); ctx.closePath(); ctx.fill()
   ctx.fillStyle = '#0b1220'; ctx.beginPath(); ctx.arc(w*0.35, -h*0.18, Math.max(1.5, h*0.12), 0, Math.PI*2); ctx.fill()
-  ctx.restore()
 }
 
 /* ===== main ===== */
@@ -137,7 +137,7 @@ type ProgressCb = (xp:number, xpNeeded:number, level:number, leveledUp:boolean)=
 export default function Game(
   { lang, onProgress }: { lang:'he'|'en'; onProgress?: ProgressCb }
 ) {
-
+  /* --- core refs/state --- */
   const canvasRef = useRef<HTMLCanvasElement|null>(null)
   const rafRef = useRef<number|null>(null)
   const frame = useRef(0)
@@ -159,7 +159,15 @@ export default function Game(
   const levelCfg = useRef(makeLevel(stage))
   const spawns = useRef(0)
 
-  const player = useRef<PlayerState>({ x:140, y:360, vx:0, vy:0, maxSpeed: MODE.current==='touch' ? 6.6 : 8.6, radius:BASE_R, hp:6, shieldMs:0, weapon:'blaster' })
+  // Phone thumbstick (left side), returns smoothed [-1..1] axes (numbers)
+  const { ax: touchAx, ay: touchAy } = useThumbstick(canvasRef, MODE.current === 'touch')
+
+  const player = useRef<PlayerState>({
+    x: 140, y: 360, vx: 0, vy: 0,
+    maxSpeed: MODE.current === 'touch' ? 6.4 : 8.8,  // <- tune here
+    radius: BASE_R, hp: 6, shieldMs: 0, weapon: 'blaster'
+  })
+
   const targetRadius = useRef(BASE_R)
   const weaponLevel = useRef(0)
 
@@ -198,15 +206,10 @@ export default function Game(
   const helpersRef  = useRef<Array<{id:number;x:number;y:number;phase:number}>>([])
   const twinRef     = useRef<{x:number;y:number;phase:number}|null>(null)
 
-  // touch movement (left thumb only)
-  const moveTouchId = useRef<number|null>(null)
-  const moveOrigin  = useRef<{x:number;y:number}|null>(null)
-  const touchAx = useRef(0), touchAy = useRef(0)
-
   // auto-aim angle
   const aimAngle = useRef(0)
 
-  /* sizing */
+  /* ===== sizing ===== */
   useEffect(()=>{
     const c=canvasRef.current!, ctx=c.getContext('2d')!
     const onResize=()=>{
@@ -224,7 +227,7 @@ export default function Game(
     return ()=>window.removeEventListener('resize',onResize)
   },[])
 
-  /* toggles */
+  /* ===== toggles ===== */
   useEffect(()=>{
     const onKey=(e:KeyboardEvent)=>{
       const k=e.key.toLowerCase()
@@ -236,62 +239,7 @@ export default function Game(
     return ()=>window.removeEventListener('keydown',onKey)
   },[mute,gameOver])
 
-  /* touch joystick (left) — very smooth, with deadzone & radius */
-  useEffect(()=>{
-    if (MODE.current!=='touch') return
-    const c = canvasRef.current!
-    const getLocal = (ev: Touch | MouseEvent) => {
-      const r = c.getBoundingClientRect()
-      return { x: (ev.clientX - r.left), y: (ev.clientY - r.top) }
-    }
-    const R = 92, DZ = 12
-    const onTouchStart = (e: TouchEvent) => {
-      for (const t of Array.from(e.changedTouches)) {
-        const local = getLocal(t as any)
-        if (local.x < c.clientWidth * 0.55 && moveTouchId.current === null) {
-          moveTouchId.current = t.identifier
-          moveOrigin.current = local
-          touchAx.current = 0; touchAy.current = 0
-        }
-      }
-    }
-    const onTouchMove = (e: TouchEvent) => {
-      for (const t of Array.from(e.changedTouches)) {
-        if (t.identifier === moveTouchId.current && moveOrigin.current) {
-          const local = getLocal(t as any)
-          const dx = local.x - moveOrigin.current.x
-          const dy = local.y - moveOrigin.current.y
-          const len = Math.hypot(dx,dy)
-          const mag = len <= DZ ? 0 : Math.min(1, (len-DZ)/(R-DZ))
-          const nx = (len>0? dx/len : 0) * mag
-          const ny = (len>0? dy/len : 0) * mag
-          touchAx.current = nx
-          touchAy.current = ny
-        }
-      }
-    }
-    const onTouchEnd = (e: TouchEvent) => {
-      for (const t of Array.from(e.changedTouches)) {
-        if (t.identifier === moveTouchId.current) {
-          moveTouchId.current = null
-          moveOrigin.current = null
-          touchAx.current = 0; touchAy.current = 0
-        }
-      }
-    }
-    c.addEventListener('touchstart', onTouchStart, { passive: true })
-    c.addEventListener('touchmove',  onTouchMove,  { passive: true })
-    c.addEventListener('touchend',   onTouchEnd)
-    c.addEventListener('touchcancel',onTouchEnd)
-    return () => {
-      c.removeEventListener('touchstart', onTouchStart)
-      c.removeEventListener('touchmove',  onTouchMove)
-      c.removeEventListener('touchend',   onTouchEnd)
-      c.removeEventListener('touchcancel',onTouchEnd)
-    }
-  },[])
-
-  /* loop */
+  /* ===== loop ===== */
   useEffect(()=>{
     const c=canvasRef.current!, ctx=c.getContext('2d')!
     if(!bubblesRef.current.length){
@@ -331,10 +279,9 @@ export default function Game(
       if(dmgBounce.current>0) dmgBounce.current=Math.max(0,dmgBounce.current-0.08*dt)
       if (xpGainPulse.current > 0) xpGainPulse.current -= 0.05*dt
 
-      /* input resolve */
-      let axEff = 0, ayEff = 0
-      if (MODE.current==='touch') { axEff = touchAx.current; ayEff = touchAy.current }
-      else { axEff = kbAx; ayEff = kbAy }
+      /* input resolve (touch uses thumbstick, desktop uses keyboard) */
+      const axEff = MODE.current === 'touch' ? touchAx : kbAx
+      const ayEff = MODE.current === 'touch' ? touchAy : kbAy
 
       /* critically-damped smoothing (framerate independent) */
       const targetVx = axEff * player.current.maxSpeed
@@ -443,7 +390,7 @@ export default function Game(
         } else if (k === 'siren') {
           e.x += num(e.vx,0)*0.94*ts; e.y += Math.sin(num(d.t)*1.8)*1.4
           if (frame.current % 50 === 0) {
-            const speed = 3.6 + stage*0.05
+            const speed = 3.6 + stage * 0.05
             const dx = player.current.x - e.x
             const dy = player.current.y - e.y
             const dlen = Math.max(0.001, Math.hypot(dx, dy))
@@ -621,7 +568,8 @@ export default function Game(
       }
       particlesRef.current = particlesRef.current.filter(sp => num(sp.data?.life, 0) > 0)
       for(const bb of bubblesRef.current){ bb.y-=bb.v*dt; if(bb.y<-10){ bb.x=rnd(0,W.current); bb.y=H.current+rnd(10,80); bb.r=rnd(2,6); bb.v=rnd(0.35,0.9) } }
-onProgress?.(xp.current, xpToNext.current, playerLevel.current, leveledUpThisFrame)
+
+      onProgress?.(xp.current, xpToNext.current, playerLevel.current, leveledUpThisFrame)
 
       draw(ctx)
     }
