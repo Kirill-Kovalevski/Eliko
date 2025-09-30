@@ -1,4 +1,4 @@
-/* Game.tsx — 2025 phone-mode feel: twin-stick hold-to-fire, no touch rings, no contact damage, cute enemies + POLICE siren, generous buffs */
+/* Game.tsx — Auto-fire + buttery phone movement, desktop arrow buttons, cute enemies, police siren, generous buffs, animated XP bar */
 import { useEffect, useRef, useState } from 'react'
 import type { Entity, PlayerState, WeaponId, PowerUpKind } from './types'
 import { clamp, lerp, rnd, id, aabb } from './utils'
@@ -6,20 +6,20 @@ import { useInput } from './useInput'
 import { synth } from './audio'
 import { makeLevel, STAGE_LENGTH } from './levels'
 
-/* ========= small helpers ========= */
+/* ===== helpers ===== */
 const num = (v: any, d = 0) => { const n = Number(v); return Number.isFinite(n) ? n : d }
 const flag = (v: any) => v === true
 const text = (v: any, d = '') => (typeof v === 'string' ? v : d)
 const ensureData = <T extends { data?: Record<string, any> }>(o: T) =>
   (o.data ??= {} as Record<string, any>)
 
-/* ========= types ========= */
+/* ===== game types ===== */
 type EnemyKind = 'jelly'|'squid'|'manta'|'nautilus'|'puffer'|'crab'|'siren'
 type PU = Extract<PowerUpKind,'shield'|'speed'|'heal'|'weapon'|'drone'|'haste'>
 type MythicPU = 'barrier'|'twin'|'familiars'
 type AnyPU = PU | MythicPU
 
-/* ========= constants ========= */
+/* ===== constants ===== */
 const WEAPON_TIER: Readonly<WeaponId[]> =
   ['blaster','spread','piercer','laser','rail','orbitals','nova'] as const
 
@@ -31,7 +31,7 @@ const PADDING = 14
 const BASE_R  = 26
 const MAX_LIVES = 6
 
-/* ========= casting helpers ========= */
+/* ===== casting ===== */
 const asWeaponId = (x: unknown): WeaponId =>
   (WEAPON_TIER as readonly string[]).includes(String(x)) ? (x as WeaponId) : 'blaster'
 const asEnemyKind = (x: unknown): EnemyKind => {
@@ -39,12 +39,8 @@ const asEnemyKind = (x: unknown): EnemyKind => {
   return (bag as readonly string[]).includes(String(x)) ? (x as EnemyKind) : 'jelly'
 }
 
-/* ========= entities ========= */
-function bullet(
-  x:number,y:number,w:number,h:number,
-  vx:number, vy:number,
-  kind:WeaponId|string, data:Record<string,unknown>={}
-):Entity{
+/* ===== entities ===== */
+function bullet(x:number,y:number,w:number,h:number,vx:number,vy:number,kind:WeaponId|string,data:Record<string,unknown>={}):Entity{
   return { id:id(), x,y,w,h, vx, vy, type:'bullet', data:{kind,...data} } as any
 }
 function spark(x:number,y:number,c:string,life=26,sz=3):Entity{
@@ -61,20 +57,19 @@ function enemy(kind:EnemyKind,x:number,y:number,speed:number,hp=1,heavy=false):E
   const s=sizes[kind]; return { id:id(), x,y,w:s.w,h:s.h, vx:-speed, vy:0, type:'enemy', hp, data:{kind,t:0,heavy,blink:0} } as any
 }
 function boss(x:number,y:number,hp:number):Entity{
-  // friendly sea-dragon look; gameplay hostile
   return { id:id(), x,y,w:220,h:140, vx:-0.9, vy:0, type:'boss', hp, data:{phase:1,t:0,aura:1} } as any
 }
 
-/* ========= weapon map (angle-aware) ========= */
+/* ===== weapons (angle-aware) ===== */
 type FireFn = (p:PlayerState, ang:number)=>Entity[]
 const WEAPONS: Record<WeaponId, { gap:number; sfx:()=>void; onFire:FireFn }> = {
   blaster:{ gap:8,  sfx:()=>synth.shoot(), onFire:(p,ang)=>[
     bullet(p.x+18,p.y,8,4, Math.cos(ang)*9, Math.sin(ang)*9,'blaster')
   ]},
-  spread: { gap:14, sfx:()=>synth.spread(), onFire:(p,ang)=>[
-    bullet(p.x+18,p.y,8,4, Math.cos(ang-0.18)*7, Math.sin(ang-0.18)*7,'spread'),
-    bullet(p.x+18,p.y,8,4, Math.cos(ang)*7,      Math.sin(ang)*7,     'spread'),
-    bullet(p.x+18,p.y,8,4, Math.cos(ang+0.18)*7, Math.sin(ang+0.18)*7,'spread'),
+  spread: { gap:13, sfx:()=>synth.spread(), onFire:(p,ang)=>[
+    bullet(p.x+18,p.y,8,4, Math.cos(ang-0.2)*7.2, Math.sin(ang-0.2)*7.2,'spread'),
+    bullet(p.x+18,p.y,8,4, Math.cos(ang)*7.2,      Math.sin(ang)*7.2,     'spread'),
+    bullet(p.x+18,p.y,8,4, Math.cos(ang+0.2)*7.2, Math.sin(ang+0.2)*7.2,'spread'),
   ]},
   piercer:{ gap:16, sfx:()=>synth.pierce(), onFire:(p,ang)=>[
     bullet(p.x+20,p.y,14,5, Math.cos(ang)*10, Math.sin(ang)*10,'piercer',{pierce:3})
@@ -82,14 +77,14 @@ const WEAPONS: Record<WeaponId, { gap:number; sfx:()=>void; onFire:FireFn }> = {
   laser:  { gap:22, sfx:()=>synth.laser(),  onFire:(p,ang)=>[
     bullet(p.x+26,p.y,18,6, Math.cos(ang)*12, Math.sin(ang)*12,'laser',{pierce:6,dmg:2})
   ]},
-  rail:   { gap:34, sfx:()=>synth.rail(),   onFire:(p,ang)=>[
+  rail:   { gap:32, sfx:()=>synth.rail(),   onFire:(p,ang)=>[
     bullet(p.x+24,p.y,4,72, Math.cos(ang)*16, Math.sin(ang)*16,'rail',{pierce:8,dmg:3})
   ]},
   orbitals:{gap:16, sfx:()=>synth.shoot(),  onFire:(p)=>[orbital(p,0),orbital(p,Math.PI)]},
-  nova:   { gap:36, sfx:()=>synth.nova(),   onFire:(p,ang)=>novaFan(p,ang)},
+  nova:   { gap:34, sfx:()=>synth.nova(),   onFire:(p,ang)=>novaFan(p,ang)},
 }
 
-/* ========= drawing helpers ========= */
+/* ===== drawing helpers ===== */
 function roundCapsule(ctx:CanvasRenderingContext2D, x:number, y:number, w:number, h:number, r:number){
   const rr = Math.min(r, h/2); ctx.beginPath(); ctx.moveTo(x+rr, y); ctx.lineTo(x+w-rr, y)
   ctx.arc(x+w-rr, y+rr, rr, -Math.PI/2, Math.PI/2); ctx.lineTo(x+rr, y+h); ctx.arc(x+rr, y+rr, rr, Math.PI/2, -Math.PI/2); ctx.closePath()
@@ -129,7 +124,7 @@ function drawSeaDragonBullet(ctx: CanvasRenderingContext2D, x: number, y: number
   ctx.restore()
 }
 
-/* ========= component ========= */
+/* ===== main component ===== */
 export default function Game(props: {
   lang: 'he' | 'en'
   onProgress?: (xp: number, xpNeeded: number, level: number, didLevelUp: boolean) => void
@@ -145,32 +140,32 @@ export default function Game(props: {
   const [stage,setStage] = useState(1)
   const [bossActive,setBossActive] = useState(false)
 
-  const { fire, ax, ay } = useInput()
+  const { ax: kbAx, ay: kbAy } = useInput()   // we ignore "fire" because auto-fire
 
   const W = useRef(760), H = useRef(980), dpr = useRef(1)
   const lvl = useRef(makeLevel(stage))
   const spawns = useRef(0)
 
-  const player = useRef<PlayerState>({ x:140, y:360, vx:0, vy:0, maxSpeed:8.5, radius:BASE_R, hp:6, shieldMs:0, weapon:'blaster' })
+  const player = useRef<PlayerState>({ x:140, y:360, vx:0, vy:0, maxSpeed:8.6, radius:BASE_R, hp:6, shieldMs:0, weapon:'blaster' })
   const targetRadius = useRef(BASE_R)
   const weaponLevel = useRef(0)
 
-  // Progress up to App
+  // progress / XP
   const xp = useRef(0)
   const xpToNext = useRef(40)
   const playerLevel = useRef(1)
   const avatarHue = useRef(38)
+  const xpGainPulse = useRef(0) // visual pulse on gain
   const xpOrbsRef = useRef<Array<{id:number;x:number;y:number;vx:number;vy:number;life:number}>>([])
 
+  // world
   const bulletsRef = useRef<Entity[]>([])
   const enemiesRef = useRef<Entity[]>([])
   const powerupsRef = useRef<Array<{id:number;x:number;y:number;kind:AnyPU;payload?:WeaponId}>>([])
   const bossRef = useRef<Entity|null>(null)
   const particlesRef = useRef<Entity[]>([])
   const drones = useRef<{phase:number}[]>([])
-
-  const killsSincePower = useRef(0)
-  const killsNeeded = useRef(10)
+  const bubblesRef = useRef<{x:number;y:number;r:number;v:number}[]>([])
 
   const lastFire = useRef(0)
   const rapidMs = useRef(0)
@@ -181,8 +176,6 @@ export default function Game(props: {
 
   const enemiesKilled = useRef(0)
   const boostsCollected = useRef(0)
-  const killStreak = useRef(0)
-  const bubblesRef = useRef<{x:number;y:number;r:number;v:number}[]>([])
 
   // Mythic effects
   const barrierMs = useRef(0)
@@ -191,15 +184,24 @@ export default function Game(props: {
   const helpersRef  = useRef<Array<{id:number;x:number;y:number;phase:number}>>([])
   const twinRef     = useRef<{x:number;y:number;phase:number}|null>(null)
 
-  // Twin-stick (improved for phone)
+  // Phone: left-thumb joystick
   const moveTouchId = useRef<number|null>(null)
-  const aimTouchId  = useRef<number|null>(null)
   const moveOrigin  = useRef<{x:number;y:number}|null>(null)
   const touchAx = useRef(0), touchAy = useRef(0)
-  const aimAngle = useRef(0)
-  const touchFiring = useRef(false)
 
-  /* ====== sizing ====== */
+  // Auto-aim angle
+  const aimAngle = useRef(0)
+
+  // Desktop: on-screen arrow buttons
+  const arrows = useRef({up:false,down:false,left:false,right:false})
+  const arrowVec = () => {
+    let x = (arrows.current.left?-1:0) + (arrows.current.right?1:0)
+    let y = (arrows.current.up?-1:0) + (arrows.current.down?1:0)
+    const l = Math.hypot(x,y) || 1
+    return { ax: x/l, ay: y/l }
+  }
+
+  /* sizing */
   useEffect(()=>{
     const c=canvasRef.current!, ctx=c.getContext('2d')!
     const onResize=()=>{
@@ -217,7 +219,7 @@ export default function Game(props: {
     return ()=>window.removeEventListener('resize',onResize)
   },[])
 
-  /* ====== kb toggles ====== */
+  /* key toggles */
   useEffect(()=>{
     const onKey=(e:KeyboardEvent)=>{
       const k=e.key.toLowerCase()
@@ -229,16 +231,14 @@ export default function Game(props: {
     return ()=>window.removeEventListener('keydown',onKey)
   },[mute,gameOver])
 
-  /* ====== improved touch: left = move (relative joystick), right = aim/fire (absolute point) ====== */
+  /* touch joystick: left = move only (auto-aim is handled separately) */
   useEffect(()=>{
     const c = canvasRef.current!
     const getLocal = (ev: Touch | MouseEvent) => {
       const r = c.getBoundingClientRect()
       return { x: (ev.clientX - r.left), y: (ev.clientY - r.top) }
     }
-    const R = 80;         // joystick radius
-    const DZ = 10;        // deadzone
-
+    const R = 80, DZ = 10
     const onTouchStart = (e: TouchEvent) => {
       for (const t of Array.from(e.changedTouches)) {
         const local = getLocal(t as any)
@@ -246,13 +246,6 @@ export default function Game(props: {
           moveTouchId.current = t.identifier
           moveOrigin.current = local
           touchAx.current = 0; touchAy.current = 0
-        } else if (aimTouchId.current === null) {
-          aimTouchId.current = t.identifier
-          touchFiring.current = true            // begin continuous fire
-          // set initial angle toward the finger
-          const dx = local.x - player.current.x
-          const dy = local.y - player.current.y
-          aimAngle.current = Math.atan2(dy, dx)
         }
       }
     }
@@ -269,14 +262,6 @@ export default function Game(props: {
           touchAx.current = nx
           touchAy.current = ny
         }
-        if (t.identifier === aimTouchId.current) {
-          // IMPORTANT: absolute aim vs player, not relative
-          const local = getLocal(t as any)
-          const dx = local.x - player.current.x
-          const dy = local.y - player.current.y
-          aimAngle.current = Math.atan2(dy, dx)
-          touchFiring.current = true            // keep firing even if finger is still
-        }
       }
     }
     const onTouchEnd = (e: TouchEvent) => {
@@ -286,45 +271,21 @@ export default function Game(props: {
           moveOrigin.current = null
           touchAx.current = 0; touchAy.current = 0
         }
-        if (t.identifier === aimTouchId.current) {
-          aimTouchId.current = null
-          touchFiring.current = false
-        }
       }
     }
-
-    // Desktop: mouse to aim
-    const onMouseMove = (e: MouseEvent) => {
-      const local = getLocal(e)
-      const dx = local.x - player.current.x
-      const dy = local.y - player.current.y
-      aimAngle.current = Math.atan2(dy, dx)
-    }
-    const onMouseDown = () => { touchFiring.current = true }
-    const onMouseUp   = () => { touchFiring.current = false }
-
     c.addEventListener('touchstart', onTouchStart, { passive: true })
     c.addEventListener('touchmove',  onTouchMove,  { passive: true })
     c.addEventListener('touchend',   onTouchEnd)
     c.addEventListener('touchcancel',onTouchEnd)
-    c.addEventListener('mousemove',  onMouseMove)
-    c.addEventListener('mousedown',  onMouseDown)
-    c.addEventListener('mouseup',    onMouseUp)
-    c.addEventListener('mouseleave', onMouseUp)
-
     return () => {
       c.removeEventListener('touchstart', onTouchStart)
       c.removeEventListener('touchmove',  onTouchMove)
       c.removeEventListener('touchend',   onTouchEnd)
       c.removeEventListener('touchcancel',onTouchEnd)
-      c.removeEventListener('mousemove',  onMouseMove)
-      c.removeEventListener('mousedown',  onMouseDown)
-      c.removeEventListener('mouseup',    onMouseUp)
-      c.removeEventListener('mouseleave', onMouseUp)
     }
   },[])
 
-  /* ====== loop ====== */
+  /* loop */
   useEffect(()=>{
     const c=canvasRef.current!, ctx=c.getContext('2d')!
     if(!bubblesRef.current.length){
@@ -336,7 +297,7 @@ export default function Game(props: {
     const damagePlayer=(dmg=1)=>{
       if(player.current.shieldMs>0){ if(!mute) synth.hit(); hitFlash.current=8; return }
       player.current.hp-=dmg; recalcTargetRadius(); dmgBounce.current=1; hitFlash.current=16; shake.current=22
-      if(!mute) synth.hit(); killStreak.current=0
+      if(!mute) synth.hit()
       if(player.current.hp<=0){
         for(let i=0;i<120;i++) particlesRef.current.push(spark(player.current.x,player.current.y,i%2?'#22d3ee':'#a78bfa',24+rnd(0,20),2+rnd(0,3)))
         if(!mute) synth.nova(); setGameOver(true)
@@ -354,63 +315,74 @@ export default function Game(props: {
       if(rapidMs.current>0) rapidMs.current-=16
       if(hitFlash.current>0) hitFlash.current-=1
       if(dmgBounce.current>0) dmgBounce.current=Math.max(0,dmgBounce.current-0.08)
+      if (xpGainPulse.current > 0) xpGainPulse.current -= 0.05
 
       /* movement */
       const accel=0.24
-      let axEff = ax, ayEff = ay
+      const { ax: arrX, ay: arrY } = arrowVec()
+      let axEff = kbAx, ayEff = kbAy
       if (moveTouchId.current !== null) { axEff = touchAx.current; ayEff = touchAy.current }
+      else if (arrX || arrY) { axEff = arrX; ayEff = arrY }
+
       player.current.vx=lerp(player.current.vx, axEff*player.current.maxSpeed,accel)
       player.current.vy=lerp(player.current.vy, ayEff*player.current.maxSpeed,accel)
       player.current.x=clamp(player.current.x+player.current.vx, PADDING+player.current.radius, W.current-PADDING-player.current.radius)
       player.current.y=clamp(player.current.y+player.current.vy, PADDING+player.current.radius, H.current-PADDING-player.current.radius)
-
-      /* aim fallback when no right finger */
-      if (aimTouchId.current===null && !(fire)) {
-        const mv = Math.hypot(player.current.vx, player.current.vy)
-        aimAngle.current = mv>0.1 ? Math.atan2(player.current.vy, player.current.vx) : 0
-      }
 
       player.current.radius=lerp(player.current.radius,targetRadius.current,0.25)*(1+dmgBounce.current*0.2)
       player.current.radius=Math.max(12,player.current.radius)
       if(player.current.shieldMs>0) player.current.shieldMs-=16
       if(shake.current>0) shake.current=Math.max(0,shake.current-0.8)
 
-      /* weapon + firing */
+      /* auto-aim: nearest enemy (fallback to movement dir) */
+      let nearest: Entity | null = null, best = 1e9
+      for (const e of enemiesRef.current) {
+        if (flag(e.data?.bullet)) continue
+        const dx = e.x - player.current.x, dy = e.y - player.current.y
+        const d2 = dx*dx+dy*dy
+        if (d2 < best) { best = d2; nearest = e }
+      }
+      if (nearest) {
+        aimAngle.current = Math.atan2(nearest.y - player.current.y, nearest.x - player.current.x)
+      } else {
+        const mv = Math.hypot(player.current.vx, player.current.vy)
+        if (mv>0.1) aimAngle.current = Math.atan2(player.current.vy, player.current.vx)
+      }
+
+      /* weapon + always-firing */
       const weaponId=WEAPON_TIER[Math.min(weaponLevel.current,WEAPON_TIER.length-1)]
       player.current.weapon=weaponId
       const config=WEAPONS[weaponId]
       const gapBoost=rapidMs.current>0?0.65:1
       const effectiveGap=Math.max(4,Math.floor(config.gap*gapBoost))
-      const wantsFire = fire || weaponId==='orbitals' || touchFiring.current
-      if(wantsFire && frame.current-lastFire.current>effectiveGap*ts){
+      if(frame.current-lastFire.current>effectiveGap*ts){
         for(const b of config.onFire(player.current, aimAngle.current)) bulletsRef.current.push(b)
+        // little muzzle sparkle
+        particlesRef.current.push(spark(player.current.x+Math.cos(aimAngle.current)*20, player.current.y+Math.sin(aimAngle.current)*20, '#a7f3d0', 16, 2))
         lastFire.current=frame.current; if(!mute) config.sfx()
       }
       for(const b of bulletsRef.current) if(flag(b.data?.orb)){
         const bd=ensureData(b); const ph=num(bd.phase,0)+0.14; bd.phase=ph; b.y=player.current.y+Math.sin(ph)*26; b.x+=7
       }
 
-      /* spawns: slightly slower pace, but lots of buffs */
+      /* spawns + buffs (very generous) */
       const l=lvl.current
-      const slowerSpawn = 1.20
-      const spawnEvery=Math.max(14,Math.floor(l.spawnEvery*slowerSpawn*(hasteMs.current>0?0.85:1)))
+      const spawnEvery=Math.max(12,Math.floor(l.spawnEvery*1.15*(hasteMs.current>0?0.85:1)))
       if(!bossActive && frame.current%spawnEvery===0){
         const y=rnd(PADDING+60,H.current-PADDING-60)
         const kind=asEnemyKind(pickEnemyKind(stage))
         const heavy=kind==='nautilus'||kind==='crab'
         const hp=heavy? l.enemyHp+2 : (kind==='puffer'? l.enemyHp+1 : l.enemyHp)
-        const slowerSpeed = 0.88
-        enemiesRef.current.push(enemy(kind,W.current+60,y,l.speed*ts*slowerSpeed,hp,heavy))
+        enemiesRef.current.push(enemy(kind,W.current+60,y,l.speed*ts*0.9,hp,heavy))
         spawns.current++
 
-        // Very generous drops + frequent mythics
-        const base = 0.75 // 75% drop rate
-        if(Math.random() < base){
-          const mythic = Math.random() < 0.20 // 20% mythic
+        const drop = 0.9
+        if(Math.random() < drop){
+          const mythic = Math.random() < 0.22
           if (mythic) {
             powerupsRef.current.push({id:id(),x:W.current+50,y,kind:MYTHIC_POOL[Math.floor(Math.random()*MYTHIC_POOL.length)]})
           } else {
-            const isBad = Math.random() < 0.12
+            const isBad = Math.random() < 0.1
             const kindPU=(isBad?BAD_ONLY:GOOD_POOL)[Math.floor(Math.random()*(isBad?BAD_ONLY.length:GOOD_POOL.length))]
             powerupsRef.current.push({id:id(),x:W.current+50,y,kind:kindPU,payload:pickWeaponWeighted(stage)})
           }
@@ -426,7 +398,7 @@ export default function Game(props: {
       for(const sp of bulletsRef.current){ sp.x+=num(sp.vx,0)*ts; sp.y+=num(sp.vy,0)*ts }
       bulletsRef.current=bulletsRef.current.filter(sp=>sp.x<W.current+140 && sp.x>-140 && sp.y>-80 && sp.y<H.current+80)
 
-      /* enemies AI (alive + cute) */
+      /* enemies AI (cute) */
       for (const e of enemiesRef.current) {
         const d = ensureData(e)
         const k = asEnemyKind(text(d.kind,'jelly'))
@@ -434,11 +406,11 @@ export default function Game(props: {
         d.blink = (Math.sin(frame.current*0.08 + e.id) > 0.96) ? 1 : 0
 
         if (k === 'jelly') {
-          e.x += num(e.vx,0)*ts*0.70; e.y += Math.sin(num(d.t)*2.1)*2.4
+          e.x += num(e.vx,0)*ts*0.68; e.y += Math.sin(num(d.t)*2.1)*2.4
         } else if (k === 'squid') {
-          e.x += num(e.vx,0)*ts*1.02;  e.y += Math.sin(num(d.t)*3.0)*1.6
+          e.x += num(e.vx,0)*ts*1.00;  e.y += Math.sin(num(d.t)*3.0)*1.6
         } else if (k === 'manta') {
-          e.x += num(e.vx,0)*ts*0.95; e.y += Math.sin(num(d.t)*1.2)*2.6
+          e.x += num(e.vx,0)*ts*0.92; e.y += Math.sin(num(d.t)*1.2)*2.6
         } else if (k === 'nautilus') {
           e.x += num(e.vx,0)*ts*0.85
           if (frame.current % 52 === 0) {
@@ -448,14 +420,11 @@ export default function Game(props: {
         } else if (k === 'puffer') {
           e.x += num(e.vx,0)*ts; d.scale = 1 + Math.sin(num(d.t)*2.6)*0.22
         } else if (k === 'crab') {
-          e.x += num(e.vx,0)*ts*0.98; e.y += Math.sin(num(d.t)*2.2)*1.0
+          e.x += num(e.vx,0)*ts*0.96; e.y += Math.sin(num(d.t)*2.2)*1.0
         } else if (k === 'siren') {
-          // police car sea-monster patrol movement
-          e.x += num(e.vx,0)*ts*0.95
-          e.y += Math.sin(num(d.t)*1.8)*1.6
-          // burst shot with siren blink
-          if (frame.current % 48 === 0) {
-            const speed = 4.1 + stage*0.06
+          e.x += num(e.vx,0)*ts*0.95; e.y += Math.sin(num(d.t)*1.8)*1.6
+          if (frame.current % 46 === 0) {
+            const speed = 4.0 + stage*0.06
             const dx = player.current.x - e.x
             const dy = player.current.y - e.y
             const dlen = Math.max(0.001, Math.hypot(dx, dy))
@@ -463,7 +432,10 @@ export default function Game(props: {
           }
         }
 
-        // enemy shooting: moderate
+        // extra wiggle
+        if (!flag(e.data?.bullet)) e.y += Math.sin(num(d.t)*4 + e.id)*0.3
+
+        // moderate enemy shooting
         if (!flag(e.data?.bullet)) {
           const shootable = (k === 'squid' || k === 'crab' || k === 'manta')
           if (shootable && frame.current % 42 === 0 && Math.random() < 0.16) {
@@ -518,11 +490,12 @@ export default function Game(props: {
             const bd=ensureData(b); let pierce=num(bd.pierce,0)
             if(pierce>0) bd.pierce=pierce-1; else (b as any).x=W.current+9999
             if(num(e.hp,0)<=0){
-              if(!mute) synth.bonus(); enemiesKilled.current++; killsSincePower.current++
-              setScore(s=>s+10); killStreak.current++; (e as any).x=-9999
+              if(!mute) synth.bonus(); enemiesKilled.current++
+              setScore(s=>s+10); (e as any).x=-9999
               for(let i=0;i<Math.floor(rnd(3,6));i++){
                 xpOrbsRef.current.push({id:id(),x:e.x,y:e.y, vx:rnd(-1.2,1.2),vy:rnd(-1.2,1.2), life:240})
               }
+              xpGainPulse.current = 1
             }
           }
         }
@@ -543,32 +516,21 @@ export default function Game(props: {
         }
       }
 
-      // === no contact damage ===
+      // no contact damage, just push
       const pb = {x:player.current.x,y:player.current.y,w:player.current.radius*2,h:player.current.radius*2} as any
       for(const e of enemiesRef.current){
         if(flag(e.data?.bullet)) continue
         if(aabb(pb,e)){
-          // push enemy away a little; no HP loss
           const dx = e.x - player.current.x, dy = e.y - player.current.y
           const d = Math.max(0.001, Math.hypot(dx,dy))
           e.x += (dx/d)*8; e.y += (dy/d)*8
         }
       }
-      // enemy bullets CAN damage the player
-for (const e of enemiesRef.current) {
-  if (!flag(e.data?.bullet)) continue
-  const b = e as any
-  if (aabb(pb, b)) {
-    damagePlayer(1)     // <- now the helper is used (fixes TS unused)
-    b.x = -9999         // despawn the bullet
-  }
-}
-
-      if(bossRef.current && aabb(pb,bossRef.current)){
-        // just slide off the boss body
-        const dx = bossRef.current.x - player.current.x, dy = bossRef.current.y - player.current.y
-        const d = Math.max(0.001, Math.hypot(dx,dy))
-        player.current.x -= (dx/d)*4; player.current.y -= (dy/d)*4
+      // enemy bullets damage player
+      for (const e of enemiesRef.current) {
+        if (!flag(e.data?.bullet)) continue
+        const b = e as any
+        if (aabb(pb, b)) { damagePlayer(1); b.x = -9999 }
       }
 
       /* pick-ups */
@@ -577,7 +539,7 @@ for (const e of enemiesRef.current) {
         if(aabb(pb, box as any)){
           (pu as any).x=-9999; boostsCollected.current++
           if(pu.kind==='shield') player.current.shieldMs=3600
-          if(pu.kind==='speed'){ player.current.maxSpeed=Math.min(13.0,player.current.maxSpeed+0.9); rapidMs.current=5200 }
+          if(pu.kind==='speed'){ player.current.maxSpeed=Math.min(13.2,player.current.maxSpeed+0.9); rapidMs.current=5200 }
           if(pu.kind==='heal'){ player.current.hp=Math.min(MAX_LIVES,player.current.hp+1); recalcTargetRadius() }
           if(pu.kind==='weapon'&&pu.payload){ const target=WEAPON_TIER.indexOf(asWeaponId(pu.payload)); if(target>weaponLevel.current) weaponLevel.current=target; rapidMs.current=5200 }
           if(pu.kind==='drone') drones.current.push({phase:Math.random()*Math.PI*2})
@@ -590,7 +552,7 @@ for (const e of enemiesRef.current) {
         }
       }
 
-      /* familiars / twin / barrier visuals + fire */
+      /* familiars / twin / barrier visuals + auto fire helpers */
       if (barrierMs.current > 0) barrierMs.current -= 16
       if (helpersMs.current > 0) {
         helpersMs.current -= 16
@@ -616,7 +578,7 @@ for (const e of enemiesRef.current) {
         if (!twinRef.current) twinRef.current = {x:player.current.x+24,y:player.current.y-24,phase:0}
         twinRef.current.x = lerp(twinRef.current.x, player.current.x+24, 0.15)
         twinRef.current.y = lerp(twinRef.current.y, player.current.y-24, 0.15)
-        if (frame.current-lastFire.current>8 && (fire || touchFiring.current)) {
+        if (frame.current-lastFire.current>8) {
           bulletsRef.current.push(bullet(twinRef.current.x, twinRef.current.y, 8, 4, Math.cos(aimAngle.current)*8, Math.sin(aimAngle.current)*8, 'blaster'))
         }
       } else twinRef.current = null
@@ -647,6 +609,7 @@ for (const e of enemiesRef.current) {
         if(!mute) synth.power()
       }
 
+      // particle step
       for (const sp of particlesRef.current) {
         const d = ensureData(sp)
         ;(sp as any).x += num((sp as any).vx, 0)
@@ -654,9 +617,11 @@ for (const e of enemiesRef.current) {
         d.life = num(d.life, 0) - 1
       }
       particlesRef.current = particlesRef.current.filter(sp => num(sp.data?.life, 0) > 0)
+
+      // bg bubbles
       for(const bb of bubblesRef.current){ bb.y-=bb.v; if(bb.y<-10){ bb.x=rnd(0,W.current); bb.y=H.current+rnd(10,80); bb.r=rnd(2,6); bb.v=rnd(0.4,1.0) } }
 
-      // report progress
+      // report
       props.onProgress?.(xp.current, xpToNext.current, playerLevel.current, didLevelUp)
 
       draw(ctx)
@@ -665,7 +630,7 @@ for (const e of enemiesRef.current) {
     rafRef.current=requestAnimationFrame(loop)
     return ()=>{ if(rafRef.current) cancelAnimationFrame(rafRef.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[paused,mute,stage,ax,ay,fire,gameOver])
+  },[paused,mute,stage,kbAx,kbAy,gameOver])
 
   const pickWeaponWeighted=(st:number):WeaponId=>{
     const bag:WeaponId[]=['blaster','blaster','spread','piercer']
@@ -683,16 +648,15 @@ for (const e of enemiesRef.current) {
 
   const softReset=()=>{
     setGameOver(false)
-    player.current={x:140,y:360,vx:0,vy:0,maxSpeed:8.5,radius:BASE_R,hp:6,shieldMs:0,weapon:'blaster'}
+    player.current={x:140,y:360,vx:0,vy:0,maxSpeed:8.6,radius:BASE_R,hp:6,shieldMs:0,weapon:'blaster'}
     weaponLevel.current=0; rapidMs.current=0; hasteMs.current=0; drones.current=[]
     particlesRef.current=[]; enemiesRef.current=[]; powerupsRef.current=[]; bossRef.current=null
-    lvl.current=makeLevel(stage); spawns.current=0; hitFlash.current=0; dmgBounce.current=0; shake.current=0; killStreak.current=0
+    lvl.current=makeLevel(stage); spawns.current=0; hitFlash.current=0; dmgBounce.current=0; shake.current=0
     setScore(0); enemiesKilled.current=0; boostsCollected.current=0
-    xp.current=0; xpToNext.current=40; playerLevel.current=1; avatarHue.current=38
-    killsSincePower.current=0; killsNeeded.current=10; xpOrbsRef.current=[]
+    xp.current=0; xpToNext.current=40; playerLevel.current=1; avatarHue.current=38; xpGainPulse.current=0
     barrierMs.current=0; twinMs.current=0; helpersMs.current=0
 
-    // Free starting goodies
+    // Give the player buffs immediately
     const grant: AnyPU[] = ['weapon','speed','drone','shield','familiars','twin']
     for (let i=0;i<grant.length;i++) {
       powerupsRef.current.push({
@@ -711,6 +675,7 @@ for (const e of enemiesRef.current) {
     g.addColorStop(0,'#0ea5e9'); g.addColorStop(1,'#312e81')
     ctx.fillStyle=g; ctx.fillRect(0,0,w,h)
 
+    // soft light bands
     ctx.globalAlpha=0.16
     for(let i=0;i<5;i++){
       const y=(Math.sin((frame.current*0.008)+(i*1.3))*0.5+0.5)*h
@@ -765,7 +730,7 @@ for (const e of enemiesRef.current) {
       ctx.restore()
     }
 
-    // enemies/bullets
+    // enemies / bullets
     for(const e of enemiesRef.current){
       ctx.save(); ctx.translate((e as any).x,(e as any).y)
       const k=asEnemyKind(text((e as any).data?.kind,'jelly'))
@@ -773,7 +738,6 @@ for (const e of enemiesRef.current) {
         ctx.fillStyle = (e as any).data?.tint || 'rgba(251,113,133,.95)'
         roundCapsule(ctx, -(e as any).w/2, -(e as any).h/2, (e as any).w, (e as any).h, 3); ctx.fill()
       } else {
-        // cute styles + blinks
         ctx.lineWidth=2
         if (k==='jelly') {
           ctx.fillStyle='#67e8f9'
@@ -798,7 +762,7 @@ for (const e of enemiesRef.current) {
           ctx.fillStyle='#fca5a5'
           ctx.beginPath(); ctx.ellipse(0,0,22,14,0,0,Math.PI*2); ctx.fill()
         } else if (k==='siren') {
-          // POLICE car sea monster
+          // police car sea monster — blue/red strobes
           const t = frame.current * 0.25 + (e.id % 60)
           const blueOn = Math.floor(t) % 2 === 0
           ctx.fillStyle='#1f2937'
@@ -813,7 +777,7 @@ for (const e of enemiesRef.current) {
       ctx.restore()
     }
 
-    // player bullets
+    // player bullets (pretty trails)
     for (const b of bulletsRef.current) {
       const k = text(b.data?.kind, 'blaster') as WeaponId
       const x = (b as any).x, y = (b as any).y, w = (b as any).w, h = (b as any).h
@@ -829,7 +793,7 @@ for (const e of enemiesRef.current) {
       }
     }
 
-    // player + mythic visuals
+    // player + mythics
     const p=player.current
     const glow=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,36)
     glow.addColorStop(0,`hsla(${avatarHue.current},95%,75%,.95)`); glow.addColorStop(1,'rgba(254,240,138,0)')
@@ -848,8 +812,8 @@ for (const e of enemiesRef.current) {
 
     // HUD (bilingual)
     const L = props.lang === 'he'
-      ? { score:'ניקוד', stage:'שלב', boss:'בוס', weapon:'נשק', fell:'נפלת במעמקים…', again:'לחצו רווח / אנטר כדי לשחק שוב', defeated:'אויבים שהובסו', boosts:'בוסטרים שנאספו' }
-      : { score:'Score', stage:'Stage', boss:'Boss', weapon:'Weapon', fell:'You fell into the depths…', again:'Press Space / Enter to play again', defeated:'Enemies defeated', boosts:'Boosters collected' }
+      ? { score:'ניקוד', stage:'שלב', boss:'בוס', weapon:'נשק' }
+      : { score:'Score', stage:'Stage', boss:'Boss', weapon:'Weapon' }
 
     ctx.fillStyle='#fff'; ctx.font='800 18px system-ui'; ctx.textAlign='right'
     ctx.fillText(`${L.score} ${score}`, w-12, 26)
@@ -864,31 +828,48 @@ for (const e of enemiesRef.current) {
       ctx.beginPath(); ctx.arc(x,y,6,0,Math.PI*2); ctx.fill()
     }
 
-    if(gameOver){
-      drawOverlay(ctx, w, h, L.fell,
-        [`${L.score}: ${score}`, `${L.defeated}: ${enemiesKilled.current}`, `${L.boosts}: ${boostsCollected.current}`],
-        L.again)
-    }
+    // XP bar (animated pulse)
+    const xpW=Math.min(w-160, 520), xpLeft=(w-xpW)/2, xpTop=12
+    ctx.fillStyle='rgba(0,0,0,.35)'; roundCapsule(ctx,xpLeft, xpTop, xpW, 12, 6); ctx.fill()
+    const xpPct=Math.max(0,Math.min(1, xp.current/xpToNext.current))
+    const xpg=ctx.createLinearGradient(xpLeft,xpTop,xpLeft+xpW,xpTop)
+    xpg.addColorStop(0,`hsl(${avatarHue.current},90%,60%)`); xpg.addColorStop(1,'#fde047')
+    const pad = Math.sin(frame.current*0.2)* (xpGainPulse.current>0 ? 4*xpGainPulse.current : 0)
+    roundCapsule(ctx,xpLeft, xpTop, xpW*xpPct + pad, 12, 6); ctx.fillStyle=xpg; ctx.fill()
 
-    // NOTE: removed dynamic joystick rings (no circles on touch)
-  }
-
-  function drawOverlay(ctx:CanvasRenderingContext2D,w:number,h:number,title:string,lines:string[],cta:string){
-    ctx.fillStyle='rgba(0,0,0,.55)'; ctx.fillRect(0,0,w,h)
-    ctx.textAlign='center'; ctx.fillStyle='#ffffff'
-    ctx.font='900 40px system-ui'; ctx.fillText(title, w/2, h/2-120)
-    ctx.font='700 18px system-ui'
-    let y=h/2-70; for(const ln of lines){ ctx.fillText(ln, w/2, y); y+=28 }
-    ctx.font='800 18px system-ui'; ctx.fillText(cta, w/2, y+26)
-    ctx.textAlign='start'
+    // No on-canvas touch rings (cleaner UI)
   }
 
   return (
     <div className="game" dir={props.lang==='he'?'rtl':'ltr'}>
-      {/* static halos (optional). Hide in CSS if you don’t want them at all */}
-      <div className="joy left" />
-      <div className="joy right" />
-      <canvas className="canvas" ref={canvasRef} onPointerDown={()=>{ if (gameOver) softReset() }} />
+      {/* Desktop arrow pad (hidden on touch devices via CSS) */}
+      <div className="arrows" aria-hidden>
+        <button className="arrow up"
+          onPointerDown={()=>{arrows.current.up=true}}
+          onPointerUp={()=>{arrows.current.up=false}}
+          onPointerLeave={()=>{arrows.current.up=false}}
+        />
+        <div className="h">
+          <button className="arrow left"
+            onPointerDown={()=>{arrows.current.left=true}}
+            onPointerUp={()=>{arrows.current.left=false}}
+            onPointerLeave={()=>{arrows.current.left=false}}
+          />
+          <button className="arrow right"
+            onPointerDown={()=>{arrows.current.right=true}}
+            onPointerUp={()=>{arrows.current.right=false}}
+            onPointerLeave={()=>{arrows.current.right=false}}
+          />
+        </div>
+        <button className="arrow down"
+          onPointerDown={()=>{arrows.current.down=true}}
+          onPointerUp={()=>{arrows.current.down=false}}
+          onPointerLeave={()=>{arrows.current.down=false}}
+        />
+      </div>
+
+      <canvas className="canvas" ref={canvasRef}
+        onPointerDown={()=>{ if (gameOver) softReset() }} />
     </div>
   )
 }
