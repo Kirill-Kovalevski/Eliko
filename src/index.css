@@ -1,0 +1,117 @@
+/* ===== Root + viewport ===== */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100dvh; width: 100vw; margin: 0; padding: 0; }
+body {
+  background: radial-gradient(1200px 1200px at 50% -10%, #122033 0%, #0b1220 60%, #07101a 100%);
+  color: #e5e7eb;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;         /* no scrollbars while playing */
+  touch-action: none;       /* smoother gestures */
+}
+
+/* ===== App layout ===== */
+.app {
+  height: 100%;
+  width: 100%;
+  display: grid;
+  place-items: center;      /* dead center */
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+}
+
+.stage {
+  display: grid;
+  place-items: center;
+  width: min(92vw, 920px);
+  height: min(94dvh, 1024px);
+}
+
+/* Canvas fits, stays crisp, no overflow */
+.canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;      /* letterbox without scroll */
+  border-radius: 18px;
+  touch-action: none;       /* IMPORTANT for twin-stick */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  box-shadow:
+    0 0 0 2px rgba(255,255,255,.06) inset,
+    0 18px 60px rgba(0,0,0,.55),
+    0 0 120px 18px rgba(102, 51, 153, .15);
+}
+
+/* ===== Title (bilingual glow) ===== */
+.header {
+  position: absolute;
+  top: clamp(6px, 2dvh, 22px);
+  inset-inline: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+.logo {
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #fff;
+  text-shadow:
+    0 0 12px rgba(250, 204, 21, .6),
+    0 0 32px rgba(168, 85, 247, .35),
+    0 0 64px rgba(59, 130, 246, .25);
+}
+.logo .sub {
+  display: inline-block;
+  margin-inline-start: .5rem;
+  font-weight: 700;
+  color: #c7d2fe;
+}
+
+/* ===== Instruction bar (Game.tsx renders) ===== */
+.instr-wrap{
+  position:fixed;left:50%;transform:translateX(-50%);
+  top:10px;width:min(900px,calc(100% - 24px));
+  pointer-events:none
+}
+.instr-bar{
+  pointer-events:auto;display:flex;gap:8px;justify-content:center;align-items:center;
+  padding:8px 10px;border-radius:999px
+}
+.glass{background:rgba(15,23,42,.45);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.1)}
+.chip{padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.2);background:transparent;color:#e5e7eb;cursor:pointer}
+.chip-info{background:rgba(255,255,255,.08)}
+.chip-ghost{background:transparent}
+.chip.active, .chip-primary{background:#22d3ee;color:#0b1220;border-color:transparent}
+.dot{display:inline-block;width:6px;height:6px;border-radius:999px;background:#22d3ee;margin-inline-end:6px}
+.instr-underline{height:1px;background:linear-gradient(to right,transparent,rgba(255,255,255,.15),transparent);margin-top:6px}
+
+/* ===== Language bar ===== */
+.langbar{
+  position: absolute;
+  bottom: 12px;
+  inset-inline: 0;
+  display: grid;
+  place-items: center;
+}
+.langchips{
+  display:inline-flex; gap:8px; background:rgba(255,255,255,.06);
+  padding:6px 10px; border-radius:999px; backdrop-filter:blur(10px)
+}
+
+/* Small phones: ensure no overflow */
+@media (max-width: 420px) {
+  .stage { width: 96vw; height: 96dvh; }
+}
