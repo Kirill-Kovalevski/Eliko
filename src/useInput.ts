@@ -1,92 +1,58 @@
 import { useEffect, useRef, useState } from 'react'
 
-/** Hybrid input:
- *  - Keyboard: arrows / WASD give continuous analog axes (ax, ay)
- *  - Pointer: drag on left-half sets analog axes (relative from start)
- *  - Fire: Space (hold) or tap/hold on right-half
- */
-export function useInput() {
+export function useInput(){
   const [fire, setFire] = useState(false)
-  const axRef = useRef(0) // -1..1
-  const ayRef = useRef(0) // -1..1
-  const [axes, setAxes] = useState({ ax: 0, ay: 0 })
+  const ax = useRef(0); const ay = useRef(0)
 
-  // Smoothly publish axes to React state (avoids too-frequent renders)
-  useEffect(() => {
-    let r = 0
-    const tick = () => {
-      r = requestAnimationFrame(tick)
-      setAxes({ ax: axRef.current, ay: ayRef.current })
-    }
-    r = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(r)
-  }, [])
-
-  // Keyboard axes
-  useEffect(() => {
-    const pressed = new Set<string>()
-    const update = () => {
-      const left = pressed.has('arrowleft') || pressed.has('a')
-      const right = pressed.has('arrowright') || pressed.has('d')
-      const up = pressed.has('arrowup') || pressed.has('w')
-      const down = pressed.has('arrowdown') || pressed.has('s')
-      axRef.current = (right ? 1 : 0) + (left ? -1 : 0)
-      ayRef.current = (down ? 1 : 0) + (up ? -1 : 0)
-    }
-    const down = (e: KeyboardEvent) => {
+  useEffect(()=>{
+    const keys = new Set<string>()
+    const onKey = (e:KeyboardEvent)=>{
       const k = e.key.toLowerCase()
-      if (k === ' ') { setFire(true); e.preventDefault() }
-      pressed.add(k); update()
+      if(['w','arrowup'].includes(k)) { keys.add('up') }
+      if(['s','arrowdown'].includes(k)) { keys.add('down') }
+      if(['a','arrowleft'].includes(k)) { keys.add('left') }
+      if(['d','arrowright'].includes(k)) { keys.add('right') }
+      if(k===' ') setFire(true)
     }
-    const up = (e: KeyboardEvent) => {
+    const onKeyUp = (e:KeyboardEvent)=>{
       const k = e.key.toLowerCase()
-      if (k === ' ') setFire(false)
-      pressed.delete(k); update()
+      if(['w','arrowup'].includes(k)) { keys.delete('up') }
+      if(['s','arrowdown'].includes(k)) { keys.delete('down') }
+      if(['a','arrowleft'].includes(k)) { keys.delete('left') }
+      if(['d','arrowright'].includes(k)) { keys.delete('right') }
+      if(k===' ') setFire(false)
     }
-    window.addEventListener('keydown', down)
-    window.addEventListener('keyup', up)
-    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up) }
-  }, [])
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('keyup', onKeyUp)
+    const i = setInterval(()=>{
+      ax.current = (keys.has('right')?1:0) - (keys.has('left')?1:0)
+      ay.current = (keys.has('down')?1:0) - (keys.has('up')?1:0)
+    }, 16)
+    return ()=>{ window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKeyUp); clearInterval(i) }
+  },[])
 
-  // Pointer (left half = movement, right half = fire)
-  useEffect(() => {
-    const view = document.body
-    let dragging = false
-    let sx = 0, sy = 0, sw = 0
-    const norm = (dx: number, dy: number) => {
-      // normalize by viewport size; deadzone
-      const nx = Math.max(-1, Math.min(1, dx / (sw * 0.2)))
-      const ny = Math.max(-1, Math.min(1, dy / (sw * 0.2)))
-      const dz = 0.08
-      return {
-        x: Math.abs(nx) < dz ? 0 : nx,
-        y: Math.abs(ny) < dz ? 0 : ny,
-      }
+  // simple touch: left half to move, right half to fire
+  useEffect(()=>{
+    const onPointer = (e:PointerEvent)=>{
+      const w = window.innerWidth
+      if(e.type==='pointerdown'||e.type==='pointermove'){
+        setFire(e.clientX > w/2)
+        const nx = (Math.max(0, Math.min(w/2, e.clientX)) / (w/2)) * 2 - 1
+        const ny = (Math.max(0, Math.min(window.innerHeight, e.clientY)) / window.innerHeight) * 2 - 1
+        ax.current = nx; ay.current = ny
+      }else if(e.type==='pointerup'||e.type==='pointercancel'){ setFire(false); ax.current=0; ay.current=0 }
     }
-    const down = (e: PointerEvent) => {
-      const r = (e.target as Element).getBoundingClientRect()
-      const x = e.clientX - r.left
-      const y = e.clientY - r.top
-      sw = r.width
-      if (x < r.width * 0.5) {
-        dragging = true; sx = x; sy = y
-        const v = norm(0, 0); axRef.current = v.x; ayRef.current = v.y
-      } else { setFire(true) }
+    window.addEventListener('pointerdown', onPointer)
+    window.addEventListener('pointermove', onPointer)
+    window.addEventListener('pointerup', onPointer)
+    window.addEventListener('pointercancel', onPointer)
+    return ()=>{
+      window.removeEventListener('pointerdown', onPointer)
+      window.removeEventListener('pointermove', onPointer)
+      window.removeEventListener('pointerup', onPointer)
+      window.removeEventListener('pointercancel', onPointer)
     }
-    const move = (e: PointerEvent) => {
-      if (!dragging) return
-      const r = (e.target as Element).getBoundingClientRect()
-      const x = e.clientX - r.left
-      const y = e.clientY - r.top
-      const v = norm(x - sx, y - sy)
-      axRef.current = v.x; ayRef.current = v.y
-    }
-    const up = () => { dragging = false; axRef.current = 0; ayRef.current = 0; setFire(false) }
-    view.addEventListener('pointerdown', down as any, { passive: true })
-    window.addEventListener('pointermove', move as any, { passive: true })
-    window.addEventListener('pointerup', up, { passive: true })
-    return () => { view.removeEventListener('pointerdown', down as any); window.removeEventListener('pointermove', move as any); window.removeEventListener('pointerup', up) }
-  }, [])
+  },[])
 
-  return { fire, setFire, ax: axes.ax, ay: axes.ay }
+  return { fire, get ax(){ return ax.current }, get ay(){ return ay.current } } as const
 }

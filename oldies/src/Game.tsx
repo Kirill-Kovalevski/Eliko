@@ -1,4 +1,3 @@
-/* FULL corrected Game.tsx */
 import { useEffect, useRef, useState } from 'react'
 import type { Entity, PlayerState, WeaponId, PowerUpKind } from './types'
 import { clamp, lerp, rnd, id, aabb } from './utils'
@@ -86,27 +85,73 @@ function oceanTentacle(ctx:CanvasRenderingContext2D,x:number,y:number,length:num
   wavyTentacle(ctx,x,y,length,segments,amplitude,'#3b82f6'); ctx.strokeStyle='#06b6d4'; ctx.shadowBlur=22; ctx.shadowColor='#67e8f9'; ctx.stroke()
 }
 // Friendly sea-dragon projectile (capsule + fin + glow + eye)
-function drawSeaDragonBullet(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, vx: number, dy: number){
+function drawSeaDragonBullet(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number,
+  w: number, h: number,
+  vx: number, dy: number
+){
+  // angle from velocity
   const ang = Math.atan2(dy || 0, Math.max(0.01, vx || 8))
-  ctx.save(); ctx.translate(x, y); ctx.rotate(ang)
+  ctx.save()
+  ctx.translate(x, y)
+  ctx.rotate(ang)
+
+  // soft glow tail
   const tail = ctx.createLinearGradient(-w*1.6, 0, w*0.5, 0)
-  tail.addColorStop(0, 'hsla(190, 90%, 65%, 0)'); tail.addColorStop(1, 'hsla(190, 95%, 72%, .55)')
-  ctx.fillStyle = tail; ctx.beginPath(); ctx.moveTo(-w*1.6, -h*0.35)
-  ctx.quadraticCurveTo(-w*0.7, 0, -w*1.6,  h*0.35); ctx.lineTo( w*0.45,  h*0.18); ctx.lineTo( w*0.45, -h*0.18); ctx.closePath(); ctx.fill()
-  ctx.shadowBlur = 14; ctx.shadowColor = 'hsl(195, 100%, 80%)'
+  tail.addColorStop(0, 'hsla(190, 90%, 65%, 0)')
+  tail.addColorStop(1, 'hsla(190, 95%, 72%, .55)')
+  ctx.fillStyle = tail
+  ctx.beginPath()
+  ctx.moveTo(-w*1.6, -h*0.35)
+  ctx.quadraticCurveTo(-w*0.7, 0, -w*1.6,  h*0.35)
+  ctx.lineTo( w*0.45,  h*0.18)
+  ctx.lineTo( w*0.45, -h*0.18)
+  ctx.closePath()
+  ctx.fill()
+
+  // body (rounded capsule)
+  ctx.shadowBlur = 14
+  ctx.shadowColor = 'hsl(195, 100%, 80%)'
   const body = ctx.createLinearGradient(-w*0.4, 0, w*0.7, 0)
-  body.addColorStop(0, 'hsl(190, 95%, 72%)'); body.addColorStop(1, 'hsl(210, 90%, 88%)')
-  ctx.fillStyle = body; roundCapsule(ctx, -w*0.4, -h*0.5, w*1.1, h, Math.min(h*0.5, 8)); ctx.fill()
-  ctx.shadowBlur = 0; ctx.fillStyle = 'hsl(190, 95%, 70%)'
-  ctx.beginPath(); ctx.moveTo(-w*0.15, 0); ctx.lineTo(-w*0.45,  h*0.42); ctx.lineTo( w*0.05,   h*0.18); ctx.closePath(); ctx.fill()
-  ctx.fillStyle = '#0b1220'; ctx.beginPath(); ctx.arc(w*0.35, -h*0.18, Math.max(1.5, h*0.12), 0, Math.PI*2); ctx.fill()
+  body.addColorStop(0, 'hsl(190, 95%, 72%)')
+  body.addColorStop(1, 'hsl(210, 90%, 88%)')
+  ctx.fillStyle = body
+  roundCapsule(ctx, -w*0.4, -h*0.5, w*1.1, h, Math.min(h*0.5, 8))
+  ctx.fill()
+
+  // little fin (friendly vibe)
+  ctx.shadowBlur = 0
+  ctx.fillStyle = 'hsl(190, 95%, 70%)'
+  ctx.beginPath()
+  ctx.moveTo(-w*0.15, 0)
+  ctx.lineTo(-w*0.45,  h*0.42)
+  ctx.lineTo( w*0.05,   h*0.18)
+  ctx.closePath()
+  ctx.fill()
+
+  // eye
+  ctx.fillStyle = '#0b1220'
+  ctx.beginPath()
+  ctx.arc(w*0.35, -h*0.18, Math.max(1.5, h*0.12), 0, Math.PI*2)
+  ctx.fill()
+
   ctx.restore()
 }
+
+// small utility used above
 function roundCapsule(ctx:CanvasRenderingContext2D, x:number, y:number, w:number, h:number, r:number){
-  const rr = Math.min(r, h/2); ctx.beginPath(); ctx.moveTo(x+rr, y); ctx.lineTo(x+w-rr, y)
-  ctx.arc(x+w-rr, y+rr, rr, -Math.PI/2, Math.PI/2); ctx.lineTo(x+rr, y+h); ctx.arc(x+rr, y+rr, rr, Math.PI/2, -Math.PI/2); ctx.closePath()
+  const rr = Math.min(r, h/2)
+  ctx.beginPath()
+  ctx.moveTo(x+rr, y)
+  ctx.lineTo(x+w-rr, y)
+  ctx.arc(x+w-rr, y+rr, rr, -Math.PI/2, Math.PI/2)
+  ctx.lineTo(x+rr, y+h)
+  ctx.arc(x+rr, y+rr, rr, Math.PI/2, -Math.PI/2)
+  ctx.closePath()
 }
 
+/* ─── Component ─── */
 export default function Game(){
   const canvasRef = useRef<HTMLCanvasElement|null>(null)
   const rafRef = useRef<number|null>(null)
@@ -114,23 +159,27 @@ export default function Game(){
 
   const [paused,setPaused] = useState(false)
   const [gameOver,setGameOver] = useState(false)
-  const [showHelp,setShowHelp] = useState(false)
+  const [showHelp,setShowHelp] = useState(true)
   const [score,setScore] = useState(0)
   const [mute,setMute] = useState(false)
   const [stage,setStage] = useState(1)
   const [bossActive,setBossActive] = useState(false)
-const [tutorialStep, setTutorialStep] = useState<0|1|2>(1) // 1->move glow, 2->fire glow, 0=off
-const tutorialTimer = useRef(0)
+
   const { fire, ax, ay } = useInput()
 
+  // responsive canvas
   const W = useRef(760), H = useRef(980), dpr = useRef(1)
+
+  // stage/level
   const level = useRef(makeLevel(stage))
   const spawns = useRef(0)
 
+  // player
   const player = useRef<PlayerState>({ x:140, y:360, vx:0, vy:0, maxSpeed:7.5, radius:BASE_R, hp:6, shieldMs:0, weapon:'blaster' })
   const targetRadius = useRef(BASE_R)
   const weaponLevel = useRef(0)
 
+  // xp
   const xp = useRef(0)
   const xpToNext = useRef(40)
   const avatarHue = useRef(38)
@@ -143,6 +192,7 @@ const tutorialTimer = useRef(0)
   const particlesRef = useRef<Entity[]>([])
   const drones = useRef<{phase:number}[]>([])
 
+  // kill → power boost
   const killsSincePower = useRef(0)
   const killsNeeded = useRef(10)
 
@@ -155,6 +205,7 @@ const tutorialTimer = useRef(0)
 
   const enemiesKilled = useRef(0)
   const boostsCollected = useRef(0)
+
   const killStreak = useRef(0)
   const bubblesRef = useRef<{x:number;y:number;r:number;v:number}[]>([])
 
@@ -195,19 +246,8 @@ const tutorialTimer = useRef(0)
 
     const loop=()=>{
       rafRef.current=requestAnimationFrame(loop)
-      if (paused || gameOver) { draw(ctx); return }
-
+      if (paused || gameOver || showHelp) { draw(ctx); return }
       frame.current++
-
-// tutorial auto-advance (~2.2s per step)
-if (tutorialStep !== 0) {
-  tutorialTimer.current += 16
-  if (tutorialTimer.current > 2200) {
-    tutorialTimer.current = 0
-    setTutorialStep(s => (s === 1 ? 2 : 0))
-  }
-}
-
 
       const ts=(hasteMs.current>0?1.35:1)
       if(hasteMs.current>0) hasteMs.current-=16
@@ -215,20 +255,25 @@ if (tutorialStep !== 0) {
       if(hitFlash.current>0) hitFlash.current-=1
       if(dmgBounce.current>0) dmgBounce.current=Math.max(0,dmgBounce.current-0.08)
 
+      // movement
       const accel=0.2
       player.current.vx=lerp(player.current.vx, ax*player.current.maxSpeed,accel)
       player.current.vy=lerp(player.current.vy, ay*player.current.maxSpeed,accel)
       player.current.x=clamp(player.current.x+player.current.vx, PADDING+player.current.radius, W.current-PADDING-player.current.radius)
       player.current.y=clamp(player.current.y+player.current.vy, PADDING+player.current.radius, H.current-PADDING-player.current.radius)
 
+      
+      // radius & hits
       player.current.radius=lerp(player.current.radius,targetRadius.current,0.25)*(1+dmgBounce.current*0.2)
       player.current.radius=Math.max(12,player.current.radius)
       if(player.current.shieldMs>0) player.current.shieldMs-=16
       if(shake.current>0) shake.current=Math.max(0,shake.current-0.8)
 
+      // active weapon
       const weaponId=WEAPON_TIER[Math.min(weaponLevel.current,WEAPON_TIER.length-1)]
       player.current.weapon=weaponId
 
+      // drones
       for(const d of drones.current){
         d.phase+=0.055*ts
         if(frame.current%22===0){
@@ -237,6 +282,7 @@ if (tutorialStep !== 0) {
         }
       }
 
+      // shooting
       const config=WEAPONS[weaponId]
       const gapBoost=rapidMs.current>0?0.65:1
       const effectiveGap=Math.max(4,Math.floor(config.gap*gapBoost))
@@ -245,10 +291,12 @@ if (tutorialStep !== 0) {
         lastFire.current=frame.current; if(!mute) config.sfx()
       }
 
+      // orbital bullet follow
       for(const b of bulletsRef.current) if(flag(b.data?.orb)){
         const bd=ensureData(b); const ph=num(bd.phase,0)+0.14; bd.phase=ph; b.y=player.current.y+Math.sin(ph)*26; b.x+=7
       }
 
+      // spawns
       const lv=level.current
       const spawnEvery=Math.max(12,Math.floor(lv.spawnEvery*(hasteMs.current>0?0.85:1)))
       if(!bossActive && frame.current%Math.floor(spawnEvery)===0){
@@ -267,54 +315,70 @@ if (tutorialStep !== 0) {
         }
       }
 
+      // boss gate
       if(!bossActive && spawns.current>=STAGE_LENGTH){
         bossRef.current=boss(W.current+200,H.current/2,lv.bossHp+80)
         setBossActive(true); spawns.current=0
       }
 
+      // bullets
       for(const sp of bulletsRef.current){ sp.x+=num(sp.vx,0)*ts; const ddy=num(sp.data?.dy,0); if(ddy) sp.y+=ddy*ts }
       bulletsRef.current=bulletsRef.current.filter(sp=>sp.x<W.current+140 && sp.y>-80 && sp.y<H.current+80)
 
-      // enemies AI
-      for (const e of enemiesRef.current) {
-        const d = ensureData(e)
-        const k = asEnemyKind(text(d.kind,'jelly'))
-        d.t = num(d.t,0) + 0.03*ts
-        if (k === 'jelly') {
-          e.x += num(e.vx,0)*ts*0.75; e.y += Math.sin(num(d.t)*2.0)*2.6
-        } else if (k === 'squid') {
-          e.x += num(e.vx,0)*ts*1.2;  e.y += Math.sin(num(d.t)*3.0)*1.8
-        } else if (k === 'manta') {
-          e.x += num(e.vx,0)*ts*1.05; e.y += Math.sin(num(d.t)*1.2)*3.2
-        } else if (k === 'nautilus') {
-          e.x += num(e.vx,0)*ts*0.9
-          if (frame.current % 46 === 0) {
-            const ang = num(d.t) * 3.14
-            enemiesRef.current.push({ id:id(), x:e.x-20, y:e.y, w:20, h:20, vx:-4.4, vy:Math.sin(ang)*2.4, type:'enemy', hp:1, data:{ bullet:true } } as any)
-          }
-        } else if (k === 'puffer') {
-          e.x += num(e.vx,0)*ts; d.scale = 1 + Math.sin(num(d.t)*3)*0.25
-        } else if (k === 'crab') {
-          e.x += num(e.vx,0)*ts*1.15; e.y += Math.sin(num(d.t)*2.6)*1.2
-        }
+// enemies AI
+for (const e of enemiesRef.current) {
+  const d = ensureData(e)
+  const k = asEnemyKind(text(d.kind,'jelly'))
+  d.t = num(d.t,0) + 0.03*ts
 
-        // enemy shooting
-        if (!flag(e.data?.bullet)) {
-          const shootable = (k === 'squid' || k === 'crab' || k === 'manta')
-          if (shootable && frame.current % 34 === 0 && Math.random() < 0.20) {
-            const lead = 14
-            const dx = (player.current.x + player.current.vx * lead) - e.x
-            const dy = (player.current.y + player.current.vy * lead) - e.y
-            const dlen = Math.max(0.001, Math.hypot(dx, dy))
-            const speed = 4.0 + stage * 0.08
-            enemiesRef.current.push({
-              id: id(), x: e.x, y: e.y, w: 14, h: 8,
-              vx: (dx / dlen) * speed, vy: (dy / dlen) * speed,
-              type: 'enemy', hp: 1, data: { bullet: true, tint: '#fb7185' }
-            } as any)
-          }
-        }
-      }
+  if (k === 'jelly') {
+    e.x += num(e.vx,0)*ts*0.75; e.y += Math.sin(num(d.t)*2.0)*2.6
+  } else if (k === 'squid') {
+    e.x += num(e.vx,0)*ts*1.2;  e.y += Math.sin(num(d.t)*3.0)*1.8
+  } else if (k === 'manta') {
+    e.x += num(e.vx,0)*ts*1.05; e.y += Math.sin(num(d.t)*1.2)*3.2
+  } else if (k === 'nautilus') {
+    e.x += num(e.vx,0)*ts*0.9
+    if (frame.current % 46 === 0) {
+      const ang = num(d.t) * 3.14
+      enemiesRef.current.push({ id:id(), x:e.x-20, y:e.y, w:20, h:20, vx:-4.4, vy:Math.sin(ang)*2.4, type:'enemy', hp:1, data:{ bullet:true } } as any)
+    }
+  } else if (k === 'puffer') {
+    e.x += num(e.vx,0)*ts; d.scale = 1 + Math.sin(num(d.t)*3)*0.25
+ } else if (k === 'crab') {
+  e.x += num(e.vx,0)*ts*1.15
+  e.y += Math.sin(num(d.t)*2.6)*1.2
+}
+
+
+  // enemy shooting (lead slightly toward player)
+  if (!flag(e.data?.bullet)) {
+    const shootable = (k === 'squid' || k === 'crab' || k === 'manta')
+    if (shootable && frame.current % 34 === 0 && Math.random() < 0.20) {
+      const lead = 14
+      const dx = (player.current.x + player.current.vx * lead) - e.x
+      const dy = (player.current.y + player.current.vy * lead) - e.y
+      const dlen = Math.max(0.001, Math.hypot(dx, dy))
+      const speed = 4.0 + stage * 0.08
+      enemiesRef.current.push({
+        id: id(),
+        x: e.x, y: e.y,
+        w: 14, h: 8,
+        vx: (dx / dlen) * speed,
+        vy: (dy / dlen) * speed,
+        type: 'enemy',
+        hp: 1,
+        data: { bullet: true, tint: '#fb7185' }
+      } as any)
+    }
+  }
+}
+
+
+
+      // powerups movement
+      for(const p of powerupsRef.current){ p.x-=level.current.speed*0.95*ts; p.y+=Math.sin((frame.current+p.id)*0.04)*0.65 }
+      powerupsRef.current=powerupsRef.current.filter(p=>p.x>-60)
 
       // boss patterns
       if(bossRef.current){
@@ -339,8 +403,10 @@ if (tutorialStep !== 0) {
         if(b.x<W.current-230) b.x=W.current-230
       }
       for (const e of enemiesRef.current) if (flag(e.data?.bullet)) {
-        e.x += num(e.vx, 0) * ts; e.y += num(e.vy, 0) * ts
-      }
+  e.x += num(e.vx, 0) * ts
+  e.y += num(e.vy, 0) * ts
+}
+
 
       // collisions
       for(const b of bulletsRef.current){
@@ -354,7 +420,7 @@ if (tutorialStep !== 0) {
             if(num(e.hp,0)<=0){
               if(!mute) synth.bonus(); enemiesKilled.current++; killsSincePower.current++
               setScore(s=>s+10); killStreak.current++; (e as any).x=-9999
-              for(let i=0;i<Math.floor(rnd(3,6));i++){
+              for(let i=0;i<rnd(3,6);i++){
                 xpOrbsRef.current.push({id:id(),x:e.x,y:e.y, vx:rnd(-1.2,1.2),vy:rnd(-1.2,1.2), life:240})
               }
               if(killsSincePower.current>=killsNeeded.current){
@@ -437,7 +503,6 @@ if (tutorialStep !== 0) {
       for(const bb of bubblesRef.current){ bb.y-=bb.v; if(bb.y<-10){ bb.x=rnd(0,W.current); bb.y=H.current+rnd(10,80); bb.r=rnd(2,6); bb.v=rnd(0.4,1.2) } }
 
       draw(ctx)
-      
     }
 
     const recalcTargetRadius=()=>{ const t=Math.max(1,player.current.hp)/MAX_LIVES; targetRadius.current=BASE_R*(0.32+0.68*t) }
@@ -482,8 +547,11 @@ if (tutorialStep !== 0) {
     killsSincePower.current=0; killsNeeded.current=10; xpOrbsRef.current=[]
   }
 
+  /* ─── Draw ─── */
   function draw(ctx:CanvasRenderingContext2D){
     const w=W.current,h=H.current
+
+    // background + caustics
     const g=ctx.createLinearGradient(0,0,0,h)
     g.addColorStop(0,'#0ea5e9'); g.addColorStop(1,'#312e81')
     ctx.fillStyle=g; ctx.fillRect(0,0,w,h)
@@ -495,63 +563,32 @@ if (tutorialStep !== 0) {
       grad.addColorStop(0.5,'rgba(255,255,255,0.45)')
       grad.addColorStop(1,'rgba(255,255,255,0)')
       ctx.fillStyle=grad; ctx.fillRect(0,y-60,w,120)
-      // === Tutorial overlay (replace the old instructions screen) ===
-if (frame.current < 600) { // show first 10 seconds (600 frames at 60fps)
-  ctx.save()
-  ctx.globalAlpha = 0.9
-  ctx.fillStyle = "rgba(0,0,0,0.55)"
-  ctx.fillRect(0, 0, W.current, H.current)
-
-  ctx.globalAlpha = 1
-  ctx.strokeStyle = "yellow"
-  ctx.lineWidth = 6
-
-  if (frame.current < 300) {
-    // First 5 sec highlight: movement
-    ctx.beginPath()
-    ctx.arc(player.current.x, player.current.y, player.current.radius*3, 0, Math.PI*2)
-    ctx.stroke()
-
-    ctx.fillStyle = "white"
-    ctx.font = "24px Rubik, sans-serif"
-    ctx.textAlign = "center"
-    ctx.fillText("Drag to move", player.current.x, player.current.y - 60)
-  } else {
-    // Next 5 sec highlight: shooting
-    ctx.beginPath()
-    ctx.arc(player.current.x+50, player.current.y, 70, 0, Math.PI*2)
-    ctx.stroke()
-
-    ctx.fillStyle = "white"
-    ctx.font = "24px Rubik, sans-serif"
-    ctx.textAlign = "center"
-    ctx.fillText("Tap right side to shoot", W.current/2, player.current.y - 80)
-  }
-
-  ctx.restore()
-}
-
     }
     ctx.globalAlpha=1
+
     if(hitFlash.current>0){ ctx.fillStyle=`rgba(239,68,68,${0.14+0.08*Math.sin(frame.current*0.5)})`; ctx.fillRect(0,0,w,h) }
     if(hasteMs.current>0){ ctx.fillStyle='rgba(244,63,94,0.06)'; ctx.fillRect(0,0,w,h) }
 
+    // bubbles
     ctx.fillStyle='rgba(255,255,255,.3)'
     for(const b of bubblesRef.current){ ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill() }
 
     if(shake.current>0){ ctx.save(); ctx.translate(rnd(-shake.current,shake.current), rnd(-shake.current,shake.current)) }
 
+    // particles
     for (const sp of particlesRef.current) {
       const d = ensureData(sp)
       ctx.fillStyle = text(d.color, '#ffffff')
       ctx.fillRect((sp as any).x, (sp as any).y, (sp as any).w, (sp as any).h)
     }
 
+    // XP orbs
     for(const o of xpOrbsRef.current){
       ctx.fillStyle='hsl(50 100% 60% / .9)'
       ctx.beginPath(); ctx.arc(o.x,o.y,4,0,Math.PI*2); ctx.fill()
     }
 
+    // powerups (gold/red ring + tentacles so no “unused”)
     for (const pu of powerupsRef.current) {
       ctx.save(); ctx.translate(pu.x, pu.y)
       const isBad = pu.kind === 'haste'
@@ -579,69 +616,75 @@ if (frame.current < 600) { // show first 10 seconds (600 frames at 60fps)
       ctx.restore()
     }
 
-    // enemies render
+    // enemies
     for(const e of enemiesRef.current){
       ctx.save(); ctx.translate((e as any).x,(e as any).y)
       const k=asEnemyKind(text((e as any).data?.kind,'jelly'))
-      if (flag((e as any).data?.bullet)) {
-        const kind = text((e as any).data?.boss,'')
-        if (kind === 'spear') {
-          ctx.fillStyle='#a78bfa'
-          roundedRect(ctx,-(e as any).w/2,-(e as any).h/2,(e as any).w,(e as any).h,3); ctx.fill()
-          ctx.fillStyle='#fff'; ctx.fillRect(-(e as any).w/2, -1.5, (e as any).w*0.6, 3)
-        } else if (kind === 'ring') {
-          ctx.strokeStyle='rgba(250,204,21,.9)'; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(0,0,8,0,Math.PI*2); ctx.stroke()
-        } else if (kind === 'flame') {
-          const grd=ctx.createRadialGradient(0,0,0,0,0,12)
-          grd.addColorStop(0,'#f59e0b'); grd.addColorStop(1,'rgba(245,158,11,0)')
-          ctx.fillStyle=grd; ctx.beginPath(); ctx.arc(0,0,12,0,Math.PI*2); ctx.fill()
-        } else {
-          ctx.fillStyle = (e as any).data?.tint || 'rgba(251,113,133,.95)'
-          roundedRect(ctx, -(e as any).w/2, -(e as any).h/2, (e as any).w, (e as any).h, 3); ctx.fill()
-        }
-      } else {
-        ctx.fillStyle = colorForEnemy(k); ctx.strokeStyle='rgba(255,255,255,.25)'; ctx.lineWidth=2
-        if (k==='jelly') {
-          roundedBlob(ctx,-(e as any).w*0.35,-(e as any).h*0.2,(e as any).w*0.7,(e as any).h*0.7,18); ctx.fill()
-          ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(-6,-4,3,0,Math.PI*2); ctx.arc(6,-4,3,0,Math.PI*2); ctx.fill()
-          for (let i=-2;i<=2;i++){
-            oceanTentacle(ctx, i*5, (e as any).h*0.28, 18, 10, 6 + Math.sin((frame.current + i*8)*0.1)*2)
-          }
-        } else if (k==='squid') {
-          squidShape(ctx,(e as any).w,(e as any).h); ctx.fill(); ctx.stroke()
-          ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(0,-10,3,0,Math.PI*2); ctx.fill()
-        } else if (k==='manta') {
-          mantaShape(ctx,(e as any).w,(e as any).h); ctx.fill()
-          ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(-10,-6,3,0,Math.PI*2); ctx.arc(10,-6,3,0,Math.PI*2); ctx.fill()
-        } else if (k==='nautilus') {
-          nautilusShape(ctx,(e as any).w); ctx.fill(); ctx.stroke()
-          ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(6,-4,3,0,Math.PI*2); ctx.fill()
-        } else if (k==='puffer') {
-          const sc=num((e as any).data?.scale,1); pufferShape(ctx,(e as any).w*sc,(e as any).h*sc); ctx.fill(); ctx.stroke()
-          ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(-5,-2,2.5,0,Math.PI*2); ctx.arc(5,-2,2.5,0,Math.PI*2); ctx.fill()
-        } else if (k==='crab') {
-          crabShape(ctx,(e as any).w,(e as any).h); ctx.fill()
-          ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(-8,-4,2.5,0,Math.PI*2); ctx.arc(8,-4,2.5,0,Math.PI*2); ctx.fill()
-        }
-      }
-      ctx.restore()
+     if (flag((e as any).data?.bullet)) {
+  const kind = text((e as any).data?.boss,'')
+  if (kind === 'spear') {
+    ctx.fillStyle='#a78bfa'
+    roundedRect(ctx,-(e as any).w/2,-(e as any).h/2,(e as any).w,(e as any).h,3); ctx.fill()
+    ctx.fillStyle='#fff'; ctx.fillRect(-(e as any).w/2, -1.5, (e as any).w*0.6, 3)
+  } else if (kind === 'ring') {
+    ctx.strokeStyle='rgba(250,204,21,.9)'; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(0,0,8,0,Math.PI*2); ctx.stroke()
+  } else if (kind === 'flame') {
+    const grd=ctx.createRadialGradient(0,0,0,0,0,12)
+    grd.addColorStop(0,'#f59e0b'); grd.addColorStop(1,'rgba(245,158,11,0)')
+    ctx.fillStyle=grd; ctx.beginPath(); ctx.arc(0,0,12,0,Math.PI*2); ctx.fill()
+  } else {
+    // generic enemy bolt (pink capsule)
+    ctx.fillStyle = (e as any).data?.tint || 'rgba(251,113,133,.95)'
+    roundedRect(ctx, -(e as any).w/2, -(e as any).h/2, (e as any).w, (e as any).h, 3)
+    ctx.fill()
+  }
+} else {
+  ctx.fillStyle = colorForEnemy(k); ctx.strokeStyle='rgba(255,255,255,.25)'; ctx.lineWidth=2
+  if (k==='jelly') {
+    roundedBlob(ctx,-(e as any).w*0.35,-(e as any).h*0.2,(e as any).w*0.7,(e as any).h*0.7,18); ctx.fill()
+    ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(-6,-4,3,0,Math.PI*2); ctx.arc(6,-4,3,0,Math.PI*2); ctx.fill()
+    for (let i=-2;i<=2;i++){
+      oceanTentacle(ctx, i*5, (e as any).h*0.28, 18, 10, 6 + Math.sin((frame.current + i*8)*0.1)*2)
     }
+  } else if (k==='squid') {
+    squidShape(ctx,(e as any).w,(e as any).h); ctx.fill(); ctx.stroke()
+    ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(0,-10,3,0,Math.PI*2); ctx.fill()
+  } else if (k==='manta') {
+    mantaShape(ctx,(e as any).w,(e as any).h); ctx.fill()
+    ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(-10,-6,3,0,Math.PI*2); ctx.arc(10,-6,3,0,Math.PI*2); ctx.fill()
+  } else if (k==='nautilus') {
+    nautilusShape(ctx,(e as any).w); ctx.fill(); ctx.stroke()
+    ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(6,-4,3,0,Math.PI*2); ctx.fill()
+  } else if (k==='puffer') {
+    const sc=num((e as any).data?.scale,1); pufferShape(ctx,(e as any).w*sc,(e as any).h*sc); ctx.fill(); ctx.stroke()
+    ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(-5,-2,2.5,0,Math.PI*2); ctx.arc(5,-2,2.5,0,Math.PI*2); ctx.fill()
+  } else if (k==='crab') {
+    crabShape(ctx,(e as any).w,(e as any).h); ctx.fill()
+    ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(-8,-4,2.5,0,Math.PI*2); ctx.arc(8,-4,2.5,0,Math.PI*2); ctx.fill()
+  }
+}
 
     // player bullets
-    for (const b of bulletsRef.current) {
-      const k = asWeaponId(text(b.data?.kind, 'blaster'))
-      const x = (b as any).x, y = (b as any).y, w = (b as any).w, h = (b as any).h
-      const vx = num((b as any).vx, 8), dy = num(b.data?.dy, 0)
-      if (k === 'rail') {
-        const grd = ctx.createLinearGradient(x - w/2, y, x + w/2, y)
-        grd.addColorStop(0, 'rgba(167,139,250,.2)'); grd.addColorStop(1, 'rgba(229,231,235,.95)')
-        ctx.fillStyle = grd; ctx.fillRect(Math.floor(x - w/2), Math.floor(y - h/2), w, h)
-      } else {
-        drawSeaDragonBullet(ctx, x, y, Math.max(10, w), Math.max(6, h), vx, dy)
-      }
-    }
+// player bullets — sea-dragon style for non-rail beams
+for (const b of bulletsRef.current) {
+  const k = asWeaponId(text(b.data?.kind, 'blaster'))
+  const x = (b as any).x, y = (b as any).y, w = (b as any).w, h = (b as any).h
+  const vx = num((b as any).vx, 8), dy = num(b.data?.dy, 0)
 
-    // player avatar
+  if (k === 'rail') {
+    // keep rail as a beam
+    const grd = ctx.createLinearGradient(x - w/2, y, x + w/2, y)
+    grd.addColorStop(0, 'rgba(167,139,250,.2)')
+    grd.addColorStop(1, 'rgba(229,231,235,.95)')
+    ctx.fillStyle = grd
+    ctx.fillRect(Math.floor(x - w/2), Math.floor(y - h/2), w, h)
+  } else {
+    drawSeaDragonBullet(ctx, x, y, Math.max(10, w), Math.max(6, h), vx, dy)
+  }
+}
+
+
+    // player avatar (hue shifts on level-up)
     const p=player.current
     const glow=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,36)
     glow.addColorStop(0,`hsla(${avatarHue.current},95%,75%,.95)`); glow.addColorStop(1,'rgba(254,240,138,0)')
@@ -660,6 +703,7 @@ if (frame.current < 600) { // show first 10 seconds (600 frames at 60fps)
     ctx.fillText(`שלב ${stage}${bossRef.current?' • בוס':''}`, w-12, 48)
     ctx.fillText(`נשק ${p.weapon.toUpperCase()}`, w-12, 70)
 
+    // XP bar
     const xpW=Math.min(w-160, 520), xpLeft=(w-xpW)/2, xpTop=12
     ctx.fillStyle='rgba(0,0,0,.35)'; roundedRect(ctx,xpLeft, xpTop, xpW, 10, 6); ctx.fill()
     const xpPct=Math.max(0,Math.min(1, xp.current/xpToNext.current))
@@ -667,6 +711,7 @@ if (frame.current < 600) { // show first 10 seconds (600 frames at 60fps)
     xpg.addColorStop(0,`hsl(${avatarHue.current},90%,60%)`); xpg.addColorStop(1,'#fde047')
     roundedRect(ctx,xpLeft, xpTop, xpW*xpPct, 10, 6); ctx.fillStyle=xpg; ctx.fill()
 
+    // lives
     ctx.textAlign='start'
     for(let i=0;i<MAX_LIVES;i++){
       const x=12+i*20,y=26
@@ -674,14 +719,44 @@ if (frame.current < 600) { // show first 10 seconds (600 frames at 60fps)
       ctx.beginPath(); ctx.arc(x,y,6,0,Math.PI*2); ctx.fill()
     }
 
+    if(showHelp){ drawFancyHelp(ctx,w,h); return }
+
     if(gameOver){
       drawOverlay(ctx, w, h, 'נפלת במעמקים…',
-        [`ניקוד: ${score}`, `אויבים שהובסו: ${enemiesKilled.current}`, `בוסטרים שנאספו: ${boostsCollected.current}`],
-        'לחצו רווח / כניסה כדי לשחק שוב')
+        [
+          `ניקוד: ${score}`,
+          `אויבים שהובסו: ${enemiesKilled.current}`,
+          `בוסטרים שנאספו: ${boostsCollected.current}`
+        ],
+        'לחצו רווח / כניסה כדי לשחק שוב'
+      )
     }
   }
 
+  function drawFancyHelp(ctx:CanvasRenderingContext2D,w:number,h:number){
+    ctx.fillStyle='rgba(0,0,0,.55)'; ctx.fillRect(0,0,w,h)
+    const r=120+Math.sin(frame.current*0.08)*8
+    const cx=w/2, cy=h/2-80
+    const halo=ctx.createRadialGradient(cx,cy, r*0.6, cx,cy, r)
+    halo.addColorStop(0,'rgba(250,204,21,.35)'); halo.addColorStop(1,'rgba(250,204,21,0)')
+    ctx.fillStyle=halo; ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill()
 
+    ctx.textAlign='center'; ctx.fillStyle='#ffffff'
+    ctx.font='900 40px system-ui'; ctx.fillText('  ELIKO', cx, cy-90)
+    ctx.font='700 18px system-ui'
+    const lines=[
+      '• תנועה חופשית: WASD / מקשי חצים / גרירה באצבע',
+      '• ירי: רווח / החזקה',
+      '• טבעות זהובות = בוסטרים טובים (מגן/מהירות/רחפן/שדרוג נשק)',
+      '• טבעת אדומה = בוסטר רע (מהירות־יתר זמנית)',
+      '• פגיעה מורידה חיים ומכווצת את הדמות',
+      '• אספו XP כדי לעלות דרגה ולשדרג נשק'
+    ]
+    let y=cy-40; for(const ln of lines){ ctx.fillText(ln, cx, y); y+=28 }
+    ctx.font='800 18px system-ui'
+    ctx.fillText('לחצו רווח / לחיצה למסך כדי להתחיל', cx, y+26)
+    ctx.textAlign='start'
+  }
 
   function drawOverlay(ctx:CanvasRenderingContext2D,w:number,h:number,title:string,lines:string[],cta:string){
     ctx.fillStyle='rgba(0,0,0,.55)'; ctx.fillRect(0,0,w,h)
@@ -693,6 +768,7 @@ if (frame.current < 600) { // show first 10 seconds (600 frames at 60fps)
     ctx.textAlign='start'
   }
 
+  // simple shapes
   function roundedRect(ctx:CanvasRenderingContext2D,x:number,y:number,w:number,h:number,r:number){
     const rr=Math.min(r,w/2,h/2); ctx.beginPath()
     ctx.moveTo(x+rr,y); ctx.arcTo(x+w,y,x+w,y+h,rr); ctx.arcTo(x+w,y+h,x,y+h,rr)
@@ -717,45 +793,88 @@ if (frame.current < 600) { // show first 10 seconds (600 frames at 60fps)
     ctx.beginPath(); ctx.ellipse(0,0,w*0.5,h*0.35,0,0,Math.PI*2)
     for(let i=-2;i<=2;i++){ ctx.moveTo(-w*0.3+i*8,h*0.2); ctx.lineTo(-w*0.3+i*8,h*0.35) }
   }
-
   function InstructionBar({
-    paused, setPaused, mute, setMute, showHelp, setShowHelp, gameOver, softReset
-  }:{
-    paused:boolean; setPaused:React.Dispatch<React.SetStateAction<boolean>>;
-    mute:boolean; setMute:React.Dispatch<React.SetStateAction<boolean>>;
-    showHelp:boolean; setShowHelp:React.Dispatch<React.SetStateAction<boolean>>;
-    gameOver:boolean; softReset:()=>void;
-  }) {
-    return (
-      <div className="instr-wrap" dir="rtl">
-        <div className="instr-aura" aria-hidden={true} />
-        <div className="instr-bar glass">
-          <span className="chip chip-info"><span className="dot" /> תנועה: WASD / גרירה</span>
-          <span className="chip chip-info"><span className="dot" /> ירי: רווח / החזק</span>
-          <button className="chip chip-ghost" onClick={()=>setPaused(p=>!p)} title="P">{paused ? 'המשך' : 'השהה (P)'}</button>
-          <button className="chip chip-ghost" onClick={()=>{ setMute(m=>!m); synth.mute(!mute) }} title="M">{mute ? 'בטל השתקה (M)' : 'השתק (M)'}</button>
-          {gameOver ? (
-            <button className="chip chip-primary" onClick={softReset}>נסה/י שוב</button>
-          ) : (
-            showHelp && (<button className="chip chip-primary" onClick={()=>setShowHelp(false)}>התחל/י</button>)
-          )}
-        </div>
-        <div className="instr-underline" />
-      </div>
-    )
-  }
-
+  paused, setPaused,
+  mute, setMute,
+  showHelp, setShowHelp,
+  gameOver, softReset
+}:{
+  paused:boolean; setPaused:React.Dispatch<React.SetStateAction<boolean>>;
+  mute:boolean; setMute:React.Dispatch<React.SetStateAction<boolean>>;
+  showHelp:boolean; setShowHelp:React.Dispatch<React.SetStateAction<boolean>>;
+  gameOver:boolean; softReset:()=>void;
+}) {
   return (
-    <div className="game" dir="rtl">
-      <InstructionBar
-        paused={paused} setPaused={setPaused}
-        mute={mute} setMute={setMute}
-        showHelp={showHelp} setShowHelp={setShowHelp}
-        gameOver={gameOver} softReset={softReset}
-      />
-   <canvas className="canvas" ref={canvasRef}
-  onPointerDown={()=>{ if (gameOver) softReset() }} />
+    <div className="instr-wrap" dir="rtl">
+      <div className="instr-aura" aria-hidden />
+      <div className="instr-bar glass">
+        <span className="chip chip-info">
+          <span className="dot" /> תנועה: WASD / גרירה
+        </span>
+        <span className="chip chip-info">
+          <span className="dot" /> ירי: רווח / החזק
+        </span>
 
+        <button
+          className="chip chip-ghost"
+          onClick={()=>setPaused(p=>!p)}
+          title="P"
+        >
+          {paused ? 'המשך' : 'השהה (P)'}
+        </button>
+
+        <button
+          className="chip chip-ghost"
+          onClick={()=>{ setMute(m=>!m); synth.mute(!mute) }}
+          title="M"
+        >
+          {mute ? 'בטל השתקה (M)' : 'השתק (M)'}
+        </button>
+
+        {gameOver ? (
+          <button className="chip chip-primary" onClick={softReset}>
+            נסה/י שוב
+          </button>
+        ) : (
+          showHelp && (
+            <button
+              className="chip chip-primary"
+              onClick={()=>setShowHelp(false)}
+            >
+              התחל/י
+            </button>
+          )
+        )}
+      </div>
+
+      {/* subtle helper line under bar */}
+      <div className="instr-underline" />
     </div>
   )
 }
+
+return (
+  <div className="game" dir="rtl">
+    {/* Instruction Bar – centered, animated */}
+    <InstructionBar
+      paused={paused}
+      setPaused={setPaused}
+      mute={mute}
+      setMute={setMute}
+      showHelp={showHelp}
+      setShowHelp={setShowHelp}
+      gameOver={gameOver}
+      softReset={softReset}
+    />
+
+    <canvas
+      className="canvas"
+      ref={canvasRef}
+      onPointerDown={() => {
+        if (showHelp) setShowHelp(false)
+        else if (gameOver) softReset()
+      }}
+    />
+  </div>
+
+

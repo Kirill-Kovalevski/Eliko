@@ -1,23 +1,10 @@
-// Procedural level stream + bosses.
-// Each "stage" lasts N spawns, then a boss appears.
-
-export interface LevelState {
-  stage: number
-  spawnEvery: number
-  enemyHp: number
-  speed: number
-  bossHp: number
-}
-
-export function makeLevel(stage: number): LevelState {
-  // scale values gently per stage
+export const STAGE_LENGTH = 60
+export function makeLevel(stage:number){
+  const base = 2 + stage*0.25
   return {
-    stage,
-    spawnEvery: Math.max(26, 70 - stage * 4),
-    enemyHp: 1 + Math.floor(stage / 3),
-    speed: 2.2 + Math.min(3, stage * 0.25),
-    bossHp: 12 + stage * 6,
+    speed: base,
+    spawnEvery: Math.max(16, 42 - stage*3),
+    enemyHp: 1 + Math.floor(stage*0.5),
+    bossHp: 30 + stage*10
   }
 }
-
-export const STAGE_LENGTH = 22 // spawns per stage before boss

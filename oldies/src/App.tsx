@@ -10,13 +10,15 @@ export default function App() {
 
   const t = useMemo(() => {
     const he = {
-      title: 'ELIKO', sub: '2025',
+      title: 'ELIKO',
+      sub: '2025',
       mobile: 'נייד: גררו באצבע כדי לזוז • הקישו בצד ימין כדי לירות',
       desktop: 'מחשב: WASD / חצים • רווח לירי • P השהיה • M השתקה',
       HE: 'עברית', EN: 'English'
     }
     const en = {
-      title: 'ELIKO', sub: '— Neo-Arcade 2025',
+      title: 'ELIKO',
+      sub: '— Neo-Arcade 2025',
       mobile: 'Mobile: drag left to move • tap/hold right to fire',
       desktop: 'Desktop: WASD / Arrows • Space to fire • P pause • M mute',
       HE: 'עברית', EN: 'English'
@@ -32,12 +34,22 @@ export default function App() {
         </h1>
 
         <nav className="lang" aria-label="language">
-          <button className={`chip ${lang === 'he' ? 'active' : ''}`} onClick={() => setLang('he')} title="Hebrew">{t.HE}</button>
-          <button className={`chip ${lang === 'en' ? 'active' : ''}`} onClick={() => setLang('en')} title="English">{t.EN}</button>
+          <button
+            className={`chip ${lang === 'he' ? 'active' : ''}`}
+            onClick={() => setLang('he')}
+            title="Hebrew"
+          >{t.HE}</button>
+
+          <button
+            className={`chip ${lang === 'en' ? 'active' : ''}`}
+            onClick={() => setLang('en')}
+            title="English"
+          >{t.EN}</button>
         </nav>
       </header>
 
       <main className="stage">
+        {/* Game renders a <canvas className="canvas" id="game" /> */}
         <Game />
       </main>
 

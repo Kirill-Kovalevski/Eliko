@@ -1,16 +1,13 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
-    <title>redirecting</title>
-    <meta http-equiv="refresh" content="0; url=/Eliko/">
-    <script>
-      // client-side redirect to keep path after refresh
-      (function() {
-        var redirect = '/Eliko/' + (location.pathname + location.search + location.hash)
-          .replace(/^\/Eliko\//, '')
-        location.replace(redirect)
-      })();
-    </script>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>אליקו</title>
   </head>
-  <body></body>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>
