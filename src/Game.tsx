@@ -1,4 +1,4 @@
-/* Game.tsx — Auto-fire + buttery phone movement, desktop arrow buttons, cute enemies, police siren, generous buffs, animated XP bar */
+/* Game.tsx — ultra-smooth split controls (touch vs desktop), funny sea-creatures, auto-aim, XP, buffs */
 import { useEffect, useRef, useState } from 'react'
 import type { Entity, PlayerState, WeaponId, PowerUpKind } from './types'
 import { clamp, lerp, rnd, id, aabb } from './utils'
@@ -6,20 +6,28 @@ import { useInput } from './useInput'
 import { synth } from './audio'
 import { makeLevel, STAGE_LENGTH } from './levels'
 
-/* ===== helpers ===== */
+/* ===== tiny utils ===== */
 const num = (v: any, d = 0) => { const n = Number(v); return Number.isFinite(n) ? n : d }
 const flag = (v: any) => v === true
 const text = (v: any, d = '') => (typeof v === 'string' ? v : d)
-const ensureData = <T extends { data?: Record<string, any> }>(o: T) =>
-  (o.data ??= {} as Record<string, any>)
+const ensureData = <T extends { data?: Record<string, any> }>(o: T) => (o.data ??= {} as Record<string, any>)
+const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
 
-/* ===== game types ===== */
+/* ===== input mode detection ===== */
+function detectMode(): 'touch'|'desktop' {
+  const isiOS = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+  const coarse = typeof window !== 'undefined' && matchMedia('(pointer: coarse)').matches
+  // iPhone 12 Pro (CSS height 844) and up → treat as touch-primary
+  const bigPhone = Math.max(window.innerWidth, window.innerHeight) >= 780
+  return (isiOS && coarse && bigPhone) ? 'touch' : 'desktop'
+}
+
+/* ===== types / constants ===== */
 type EnemyKind = 'jelly'|'squid'|'manta'|'nautilus'|'puffer'|'crab'|'siren'
 type PU = Extract<PowerUpKind,'shield'|'speed'|'heal'|'weapon'|'drone'|'haste'>
 type MythicPU = 'barrier'|'twin'|'familiars'
 type AnyPU = PU | MythicPU
 
-/* ===== constants ===== */
 const WEAPON_TIER: Readonly<WeaponId[]> =
   ['blaster','spread','piercer','laser','rail','orbitals','nova'] as const
 
@@ -31,7 +39,6 @@ const PADDING = 14
 const BASE_R  = 26
 const MAX_LIVES = 6
 
-/* ===== casting ===== */
 const asWeaponId = (x: unknown): WeaponId =>
   (WEAPON_TIER as readonly string[]).includes(String(x)) ? (x as WeaponId) : 'blaster'
 const asEnemyKind = (x: unknown): EnemyKind => {
@@ -57,7 +64,7 @@ function enemy(kind:EnemyKind,x:number,y:number,speed:number,hp=1,heavy=false):E
   const s=sizes[kind]; return { id:id(), x,y,w:s.w,h:s.h, vx:-speed, vy:0, type:'enemy', hp, data:{kind,t:0,heavy,blink:0} } as any
 }
 function boss(x:number,y:number,hp:number):Entity{
-  return { id:id(), x,y,w:220,h:140, vx:-0.9, vy:0, type:'boss', hp, data:{phase:1,t:0,aura:1} } as any
+  return { id:id(), x,y,w:220,h:140, vx:-0.85, vy:0, type:'boss', hp, data:{phase:1,t:0,aura:1} } as any
 }
 
 /* ===== weapons (angle-aware) ===== */
@@ -67,9 +74,9 @@ const WEAPONS: Record<WeaponId, { gap:number; sfx:()=>void; onFire:FireFn }> = {
     bullet(p.x+18,p.y,8,4, Math.cos(ang)*9, Math.sin(ang)*9,'blaster')
   ]},
   spread: { gap:13, sfx:()=>synth.spread(), onFire:(p,ang)=>[
-    bullet(p.x+18,p.y,8,4, Math.cos(ang-0.2)*7.2, Math.sin(ang-0.2)*7.2,'spread'),
-    bullet(p.x+18,p.y,8,4, Math.cos(ang)*7.2,      Math.sin(ang)*7.2,     'spread'),
-    bullet(p.x+18,p.y,8,4, Math.cos(ang+0.2)*7.2, Math.sin(ang+0.2)*7.2,'spread'),
+    bullet(p.x+18,p.y,8,4, Math.cos(ang-0.22)*7.1, Math.sin(ang-0.22)*7.1,'spread'),
+    bullet(p.x+18,p.y,8,4, Math.cos(ang)*7.1,      Math.sin(ang)*7.1,     'spread'),
+    bullet(p.x+18,p.y,8,4, Math.cos(ang+0.22)*7.1, Math.sin(ang+0.22)*7.1,'spread'),
   ]},
   piercer:{ gap:16, sfx:()=>synth.pierce(), onFire:(p,ang)=>[
     bullet(p.x+20,p.y,14,5, Math.cos(ang)*10, Math.sin(ang)*10,'piercer',{pierce:3})
@@ -84,11 +91,7 @@ const WEAPONS: Record<WeaponId, { gap:number; sfx:()=>void; onFire:FireFn }> = {
   nova:   { gap:34, sfx:()=>synth.nova(),   onFire:(p,ang)=>novaFan(p,ang)},
 }
 
-/* ===== drawing helpers ===== */
-function roundCapsule(ctx:CanvasRenderingContext2D, x:number, y:number, w:number, h:number, r:number){
-  const rr = Math.min(r, h/2); ctx.beginPath(); ctx.moveTo(x+rr, y); ctx.lineTo(x+w-rr, y)
-  ctx.arc(x+w-rr, y+rr, rr, -Math.PI/2, Math.PI/2); ctx.lineTo(x+rr, y+h); ctx.arc(x+rr, y+rr, rr, Math.PI/2, -Math.PI/2); ctx.closePath()
-}
+/* ===== funny creature bits ===== */
 function drawSeaDragon(ctx: CanvasRenderingContext2D, x:number, y:number, t:number){
   ctx.save(); ctx.translate(x, y)
   ctx.shadowColor = 'rgba(56,189,248,.8)'; ctx.shadowBlur = 24
@@ -107,6 +110,10 @@ function drawSeaDragon(ctx: CanvasRenderingContext2D, x:number, y:number, t:numb
   ctx.fillStyle = '#0b1220'; ctx.beginPath(); ctx.arc(46, -6, 3, 0, Math.PI*2); ctx.arc(46, 6, 3, 0, Math.PI*2); ctx.fill()
   ctx.restore()
 }
+function roundCapsule(ctx:CanvasRenderingContext2D, x:number, y:number, w:number, h:number, r:number){
+  const rr = Math.min(r, h/2); ctx.beginPath(); ctx.moveTo(x+rr, y); ctx.lineTo(x+w-rr, y)
+  ctx.arc(x+w-rr, y+rr, rr, -Math.PI/2, Math.PI/2); ctx.lineTo(x+rr, y+h); ctx.arc(x+rr, y+rr, rr, Math.PI/2, -Math.PI/2); ctx.closePath()
+}
 function drawSeaDragonBullet(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, vx: number, vy: number){
   const ang = Math.atan2(vy || 0, Math.max(0.01, vx || 8))
   ctx.save(); ctx.translate(x, y); ctx.rotate(ang)
@@ -124,14 +131,17 @@ function drawSeaDragonBullet(ctx: CanvasRenderingContext2D, x: number, y: number
   ctx.restore()
 }
 
-/* ===== main component ===== */
-export default function Game(props: {
-  lang: 'he' | 'en'
-  onProgress?: (xp: number, xpNeeded: number, level: number, didLevelUp: boolean) => void
-}) {
+/* ===== main ===== */
+type ProgressCb = (xp:number, xpNeeded:number, level:number, leveledUp:boolean)=>void
+
+export default function Game(
+  { lang, onProgress }: { lang:'he'|'en'; onProgress?: ProgressCb }
+) {
+
   const canvasRef = useRef<HTMLCanvasElement|null>(null)
   const rafRef = useRef<number|null>(null)
   const frame = useRef(0)
+  const lastT = useRef(nowMs())
 
   const [paused,setPaused] = useState(false)
   const [gameOver,setGameOver] = useState(false)
@@ -140,25 +150,28 @@ export default function Game(props: {
   const [stage,setStage] = useState(1)
   const [bossActive,setBossActive] = useState(false)
 
-  const { ax: kbAx, ay: kbAy } = useInput()   // we ignore "fire" because auto-fire
+  // desktop inputs (WASD/arrows + Space)
+  const { fire, ax: kbAx, ay: kbAy } = useInput()
+
+  const MODE = useRef<'touch'|'desktop'>(detectMode())
 
   const W = useRef(760), H = useRef(980), dpr = useRef(1)
-  const lvl = useRef(makeLevel(stage))
+  const levelCfg = useRef(makeLevel(stage))
   const spawns = useRef(0)
 
-  const player = useRef<PlayerState>({ x:140, y:360, vx:0, vy:0, maxSpeed:8.6, radius:BASE_R, hp:6, shieldMs:0, weapon:'blaster' })
+  const player = useRef<PlayerState>({ x:140, y:360, vx:0, vy:0, maxSpeed: MODE.current==='touch' ? 6.6 : 8.6, radius:BASE_R, hp:6, shieldMs:0, weapon:'blaster' })
   const targetRadius = useRef(BASE_R)
   const weaponLevel = useRef(0)
 
-  // progress / XP
+  // XP / level
   const xp = useRef(0)
   const xpToNext = useRef(40)
   const playerLevel = useRef(1)
   const avatarHue = useRef(38)
-  const xpGainPulse = useRef(0) // visual pulse on gain
+  const xpGainPulse = useRef(0)
   const xpOrbsRef = useRef<Array<{id:number;x:number;y:number;vx:number;vy:number;life:number}>>([])
 
-  // world
+  // world refs
   const bulletsRef = useRef<Entity[]>([])
   const enemiesRef = useRef<Entity[]>([])
   const powerupsRef = useRef<Array<{id:number;x:number;y:number;kind:AnyPU;payload?:WeaponId}>>([])
@@ -167,6 +180,7 @@ export default function Game(props: {
   const drones = useRef<{phase:number}[]>([])
   const bubblesRef = useRef<{x:number;y:number;r:number;v:number}[]>([])
 
+  // timers
   const lastFire = useRef(0)
   const rapidMs = useRef(0)
   const hasteMs = useRef(0)
@@ -177,29 +191,20 @@ export default function Game(props: {
   const enemiesKilled = useRef(0)
   const boostsCollected = useRef(0)
 
-  // Mythic effects
+  // mythics
   const barrierMs = useRef(0)
   const twinMs = useRef(0)
   const helpersMs = useRef(0)
   const helpersRef  = useRef<Array<{id:number;x:number;y:number;phase:number}>>([])
   const twinRef     = useRef<{x:number;y:number;phase:number}|null>(null)
 
-  // Phone: left-thumb joystick
+  // touch movement (left thumb only)
   const moveTouchId = useRef<number|null>(null)
   const moveOrigin  = useRef<{x:number;y:number}|null>(null)
   const touchAx = useRef(0), touchAy = useRef(0)
 
-  // Auto-aim angle
+  // auto-aim angle
   const aimAngle = useRef(0)
-
-  // Desktop: on-screen arrow buttons
-  const arrows = useRef({up:false,down:false,left:false,right:false})
-  const arrowVec = () => {
-    let x = (arrows.current.left?-1:0) + (arrows.current.right?1:0)
-    let y = (arrows.current.up?-1:0) + (arrows.current.down?1:0)
-    const l = Math.hypot(x,y) || 1
-    return { ax: x/l, ay: y/l }
-  }
 
   /* sizing */
   useEffect(()=>{
@@ -219,7 +224,7 @@ export default function Game(props: {
     return ()=>window.removeEventListener('resize',onResize)
   },[])
 
-  /* key toggles */
+  /* toggles */
   useEffect(()=>{
     const onKey=(e:KeyboardEvent)=>{
       const k=e.key.toLowerCase()
@@ -231,18 +236,19 @@ export default function Game(props: {
     return ()=>window.removeEventListener('keydown',onKey)
   },[mute,gameOver])
 
-  /* touch joystick: left = move only (auto-aim is handled separately) */
+  /* touch joystick (left) — very smooth, with deadzone & radius */
   useEffect(()=>{
+    if (MODE.current!=='touch') return
     const c = canvasRef.current!
     const getLocal = (ev: Touch | MouseEvent) => {
       const r = c.getBoundingClientRect()
       return { x: (ev.clientX - r.left), y: (ev.clientY - r.top) }
     }
-    const R = 80, DZ = 10
+    const R = 92, DZ = 12
     const onTouchStart = (e: TouchEvent) => {
       for (const t of Array.from(e.changedTouches)) {
         const local = getLocal(t as any)
-        if (local.x < c.clientWidth * 0.5 && moveTouchId.current === null) {
+        if (local.x < c.clientWidth * 0.55 && moveTouchId.current === null) {
           moveTouchId.current = t.identifier
           moveOrigin.current = local
           touchAx.current = 0; touchAy.current = 0
@@ -289,7 +295,7 @@ export default function Game(props: {
   useEffect(()=>{
     const c=canvasRef.current!, ctx=c.getContext('2d')!
     if(!bubblesRef.current.length){
-      for(let i=0;i<48;i++) bubblesRef.current.push({x:rnd(0,W.current),y:rnd(0,H.current),r:rnd(2,6),v:rnd(0.4,1.0)})
+      for(let i=0;i<56;i++) bubblesRef.current.push({x:rnd(0,W.current),y:rnd(0,H.current),r:rnd(2,6),v:rnd(0.35,0.9)})
     }
 
     const recalcTargetRadius=()=>{ const t=Math.max(1,player.current.hp)/MAX_LIVES; targetRadius.current=BASE_R*(0.32+0.68*t) }
@@ -305,36 +311,48 @@ export default function Game(props: {
     }
 
     const loop=()=>{
-      rafRef.current=requestAnimationFrame(loop)
-      if (paused || gameOver) { draw(ctx); return }
+      let leveledUpThisFrame = false
 
+      rafRef.current=requestAnimationFrame(loop)
+
+      const now = nowMs()
+      // dt in "frames", normalized by 16.666ms
+      const dt = Math.min(48, now - lastT.current) / 16.6667
+      lastT.current = now
+
+      if (paused || gameOver) { draw(ctx); return }
       frame.current++
 
-      const ts=(hasteMs.current>0?1.25:1)
-      if(hasteMs.current>0) hasteMs.current-=16
-      if(rapidMs.current>0) rapidMs.current-=16
-      if(hitFlash.current>0) hitFlash.current-=1
-      if(dmgBounce.current>0) dmgBounce.current=Math.max(0,dmgBounce.current-0.08)
-      if (xpGainPulse.current > 0) xpGainPulse.current -= 0.05
+      const tsBase = MODE.current==='touch' ? 0.92 : 1
+      const ts = (hasteMs.current>0?1.25:1) * tsBase * dt
+      if(hasteMs.current>0) hasteMs.current-=16*dt
+      if(rapidMs.current>0) rapidMs.current-=16*dt
+      if(hitFlash.current>0) hitFlash.current-=1*dt
+      if(dmgBounce.current>0) dmgBounce.current=Math.max(0,dmgBounce.current-0.08*dt)
+      if (xpGainPulse.current > 0) xpGainPulse.current -= 0.05*dt
 
-      /* movement */
-      const accel=0.24
-      const { ax: arrX, ay: arrY } = arrowVec()
-      let axEff = kbAx, ayEff = kbAy
-      if (moveTouchId.current !== null) { axEff = touchAx.current; ayEff = touchAy.current }
-      else if (arrX || arrY) { axEff = arrX; ayEff = arrY }
+      /* input resolve */
+      let axEff = 0, ayEff = 0
+      if (MODE.current==='touch') { axEff = touchAx.current; ayEff = touchAy.current }
+      else { axEff = kbAx; ayEff = kbAy }
 
-      player.current.vx=lerp(player.current.vx, axEff*player.current.maxSpeed,accel)
-      player.current.vy=lerp(player.current.vy, ayEff*player.current.maxSpeed,accel)
+      /* critically-damped smoothing (framerate independent) */
+      const targetVx = axEff * player.current.maxSpeed
+      const targetVy = ayEff * player.current.maxSpeed
+      const base = MODE.current==='touch' ? 0.14 : 0.22
+      const lerpFactor = 1 - Math.pow(1 - base, dt)  // dt-compensated
+      player.current.vx += (targetVx - player.current.vx) * lerpFactor
+      player.current.vy += (targetVy - player.current.vy) * lerpFactor
+
       player.current.x=clamp(player.current.x+player.current.vx, PADDING+player.current.radius, W.current-PADDING-player.current.radius)
       player.current.y=clamp(player.current.y+player.current.vy, PADDING+player.current.radius, H.current-PADDING-player.current.radius)
 
-      player.current.radius=lerp(player.current.radius,targetRadius.current,0.25)*(1+dmgBounce.current*0.2)
+      player.current.radius=lerp(player.current.radius,targetRadius.current,0.20*dt)*(1+dmgBounce.current*0.2)
       player.current.radius=Math.max(12,player.current.radius)
-      if(player.current.shieldMs>0) player.current.shieldMs-=16
-      if(shake.current>0) shake.current=Math.max(0,shake.current-0.8)
+      if(player.current.shieldMs>0) player.current.shieldMs-=16*dt
+      if(shake.current>0) shake.current=Math.max(0,shake.current-0.8*dt)
 
-      /* auto-aim: nearest enemy (fallback to movement dir) */
+      /* auto-aim: nearest enemy (fallback to move dir) */
       let nearest: Entity | null = null, best = 1e9
       for (const e of enemiesRef.current) {
         if (flag(e.data?.bullet)) continue
@@ -349,82 +367,83 @@ export default function Game(props: {
         if (mv>0.1) aimAngle.current = Math.atan2(player.current.vy, player.current.vx)
       }
 
-      /* weapon + always-firing */
+      /* fire rules: phone = autofire; desktop = Space bar */
       const weaponId=WEAPON_TIER[Math.min(weaponLevel.current,WEAPON_TIER.length-1)]
       player.current.weapon=weaponId
       const config=WEAPONS[weaponId]
       const gapBoost=rapidMs.current>0?0.65:1
       const effectiveGap=Math.max(4,Math.floor(config.gap*gapBoost))
-      if(frame.current-lastFire.current>effectiveGap*ts){
+      const wantFire = MODE.current==='touch' ? true : !!fire
+
+      if(wantFire && frame.current-lastFire.current>effectiveGap*ts){
         for(const b of config.onFire(player.current, aimAngle.current)) bulletsRef.current.push(b)
-        // little muzzle sparkle
         particlesRef.current.push(spark(player.current.x+Math.cos(aimAngle.current)*20, player.current.y+Math.sin(aimAngle.current)*20, '#a7f3d0', 16, 2))
         lastFire.current=frame.current; if(!mute) config.sfx()
       }
       for(const b of bulletsRef.current) if(flag(b.data?.orb)){
-        const bd=ensureData(b); const ph=num(bd.phase,0)+0.14; bd.phase=ph; b.y=player.current.y+Math.sin(ph)*26; b.x+=7
+        const bd=ensureData(b); const ph=num(bd.phase,0)+0.14*dt; bd.phase=ph; b.y=player.current.y+Math.sin(ph)*26; b.x+=7*dt
       }
 
-      /* spawns + buffs (very generous) */
-      const l=lvl.current
-      const spawnEvery=Math.max(12,Math.floor(l.spawnEvery*1.15*(hasteMs.current>0?0.85:1)))
+      /* spawns — a notch calmer for elegance */
+      const L=levelCfg.current
+      const spawnEvery=Math.max(14,Math.floor(L.spawnEvery*1.20*(hasteMs.current>0?0.85:1)))
       if(!bossActive && frame.current%spawnEvery===0){
         const y=rnd(PADDING+60,H.current-PADDING-60)
         const kind=asEnemyKind(pickEnemyKind(stage))
         const heavy=kind==='nautilus'||kind==='crab'
-        const hp=heavy? l.enemyHp+2 : (kind==='puffer'? l.enemyHp+1 : l.enemyHp)
-        enemiesRef.current.push(enemy(kind,W.current+60,y,l.speed*ts*0.9,hp,heavy))
+        const hp=heavy? L.enemyHp+2 : (kind==='puffer'? L.enemyHp+1 : L.enemyHp)
+        enemiesRef.current.push(enemy(kind,W.current+60,y,L.speed*0.85,hp,heavy))
         spawns.current++
 
-        const drop = 0.9
+        // generous early buffs for playful feel
+        const drop = 0.82
         if(Math.random() < drop){
-          const mythic = Math.random() < 0.22
+          const mythic = Math.random() < 0.20
           if (mythic) {
             powerupsRef.current.push({id:id(),x:W.current+50,y,kind:MYTHIC_POOL[Math.floor(Math.random()*MYTHIC_POOL.length)]})
           } else {
-            const isBad = Math.random() < 0.1
+            const isBad = Math.random() < 0.08
             const kindPU=(isBad?BAD_ONLY:GOOD_POOL)[Math.floor(Math.random()*(isBad?BAD_ONLY.length:GOOD_POOL.length))]
             powerupsRef.current.push({id:id(),x:W.current+50,y,kind:kindPU,payload:pickWeaponWeighted(stage)})
           }
         }
       }
-
       if(!bossActive && spawns.current>=STAGE_LENGTH){
-        bossRef.current=boss(W.current+220,H.current/2,l.bossHp+120)
+        bossRef.current=boss(W.current+220,H.current/2,L.bossHp+120)
         setBossActive(true); spawns.current=0
       }
 
-      /* bullets move */
+      /* move bullets */
       for(const sp of bulletsRef.current){ sp.x+=num(sp.vx,0)*ts; sp.y+=num(sp.vy,0)*ts }
       bulletsRef.current=bulletsRef.current.filter(sp=>sp.x<W.current+140 && sp.x>-140 && sp.y>-80 && sp.y<H.current+80)
 
-      /* enemies AI (cute) */
+      /* enemies AI — comedic motion & blinks */
       for (const e of enemiesRef.current) {
         const d = ensureData(e)
         const k = asEnemyKind(text(d.kind,'jelly'))
-        d.t = num(d.t,0) + 0.03*ts
+        d.t = num(d.t,0) + 0.03*dt
         d.blink = (Math.sin(frame.current*0.08 + e.id) > 0.96) ? 1 : 0
 
         if (k === 'jelly') {
-          e.x += num(e.vx,0)*ts*0.68; e.y += Math.sin(num(d.t)*2.1)*2.4
+          e.x += num(e.vx,0)*0.66*ts; e.y += Math.sin(num(d.t)*2.1)*2.3
         } else if (k === 'squid') {
-          e.x += num(e.vx,0)*ts*1.00;  e.y += Math.sin(num(d.t)*3.0)*1.6
+          e.x += num(e.vx,0)*0.98*ts;  e.y += Math.sin(num(d.t)*3.0)*1.5
         } else if (k === 'manta') {
-          e.x += num(e.vx,0)*ts*0.92; e.y += Math.sin(num(d.t)*1.2)*2.6
+          e.x += num(e.vx,0)*0.90*ts; e.y += Math.sin(num(d.t)*1.2)*2.5
         } else if (k === 'nautilus') {
-          e.x += num(e.vx,0)*ts*0.85
-          if (frame.current % 52 === 0) {
+          e.x += num(e.vx,0)*0.82*ts
+          if (frame.current % 56 === 0) {
             const ang = num(d.t) * 3.14
-            enemiesRef.current.push({ id:id(), x:e.x-20, y:e.y, w:20, h:20, vx:-3.9, vy:Math.sin(ang)*2.0, type:'enemy', hp:1, data:{ bullet:true } } as any)
+            enemiesRef.current.push({ id:id(), x:e.x-20, y:e.y, w:20, h:20, vx:-3.6, vy:Math.sin(ang)*1.9, type:'enemy', hp:1, data:{ bullet:true } } as any)
           }
         } else if (k === 'puffer') {
-          e.x += num(e.vx,0)*ts; d.scale = 1 + Math.sin(num(d.t)*2.6)*0.22
+          e.x += num(e.vx,0)*0.92*ts; d.scale = 1 + Math.sin(num(d.t)*2.6)*0.22
         } else if (k === 'crab') {
-          e.x += num(e.vx,0)*ts*0.96; e.y += Math.sin(num(d.t)*2.2)*1.0
+          e.x += num(e.vx,0)*0.94*ts; e.y += Math.sin(num(d.t)*2.2)*1.0
         } else if (k === 'siren') {
-          e.x += num(e.vx,0)*ts*0.95; e.y += Math.sin(num(d.t)*1.8)*1.6
-          if (frame.current % 46 === 0) {
-            const speed = 4.0 + stage*0.06
+          e.x += num(e.vx,0)*0.94*ts; e.y += Math.sin(num(d.t)*1.8)*1.4
+          if (frame.current % 50 === 0) {
+            const speed = 3.6 + stage*0.05
             const dx = player.current.x - e.x
             const dy = player.current.y - e.y
             const dlen = Math.max(0.001, Math.hypot(dx, dy))
@@ -432,47 +451,32 @@ export default function Game(props: {
           }
         }
 
-        // extra wiggle
-        if (!flag(e.data?.bullet)) e.y += Math.sin(num(d.t)*4 + e.id)*0.3
-
-        // moderate enemy shooting
+        // tiny wobble & eyebrow wiggles (just for fun)
         if (!flag(e.data?.bullet)) {
-          const shootable = (k === 'squid' || k === 'crab' || k === 'manta')
-          if (shootable && frame.current % 42 === 0 && Math.random() < 0.16) {
-            const lead = 14
-            const dx = (player.current.x + player.current.vx * lead) - e.x
-            const dy = (player.current.y + player.current.vy * lead) - e.y
-            const dlen = Math.max(0.001, Math.hypot(dx, dy))
-            const speed = 3.6 + stage * 0.06
-            enemiesRef.current.push({
-              id: id(), x: e.x, y: e.y, w: 14, h: 8,
-              vx: (dx / dlen) * speed, vy: (dy / dlen) * speed,
-              type: 'enemy', hp: 1, data: { bullet: true, tint: '#fb7185' }
-            } as any)
-          }
+          e.y += Math.sin(num(d.t)*4 + e.id)*0.28
         }
       }
 
       /* boss */
       if(bossRef.current){
         const b=bossRef.current, d=ensureData(b)
-        b.x+=-0.9*ts; d.t=num(d.t,0)+0.02; d.aura=0.8+0.2*Math.sin(frame.current*0.08)
-        b.y=H.current/2+Math.sin(num(d.t))*(72+10*stage)
-        if(frame.current%Math.max(16,40-stage*2)===0){
+        b.x+=-0.85*ts; d.t=num(d.t,0)+0.02*dt; d.aura=0.8+0.2*Math.sin(frame.current*0.08)
+        b.y=H.current/2+Math.sin(num(d.t))*(68+10*stage)
+        if(frame.current%Math.max(18,40-stage*2)===0){
           for(let i=-1;i<=1;i++){
             const a = Math.sin(num(d.t)+i)*0.4
-            enemiesRef.current.push({id:id(),x:b.x-60,y:b.y+i*20,w:18,h:6,vx:Math.cos(Math.PI+a)* (4.0+stage*0.12),vy:Math.sin(Math.PI+a)*1.1,type:'enemy',hp:1,data:{bullet:true,boss:'spear'}} as any)
+            enemiesRef.current.push({id:id(),x:b.x-60,y:b.y+i*20,w:18,h:6,vx:Math.cos(Math.PI+a)*(3.9+stage*0.11),vy:Math.sin(Math.PI+a)*1.0,type:'enemy',hp:1,data:{bullet:true,boss:'spear'}} as any)
           }
         }
-        if(frame.current%64===0){
+        if(frame.current%66===0){
           const n=10; for(let i=0;i<n;i++){
             const ang=i*(Math.PI*2/n)
-            enemiesRef.current.push({id:id(),x:b.x-40,y:b.y,w:10,h:10,vx:Math.cos(ang)*(-3.1-stage*0.07),vy:Math.sin(ang)*2.0,type:'enemy',hp:1,data:{bullet:true,boss:'ring'}} as any)
+            enemiesRef.current.push({id:id(),x:b.x-40,y:b.y,w:10,h:10,vx:Math.cos(ang)*(-3.0-stage*0.07),vy:Math.sin(ang)*1.9,type:'enemy',hp:1,data:{bullet:true,boss:'ring'}} as any)
           }
         }
-        if(frame.current%54===0){
-          const vy=Math.sin(num(d.t)+Math.random())*2.3
-          enemiesRef.current.push({id:id(),x:b.x-70,y:b.y,w:24,h:24,vx:-(2.9+stage*0.14),vy,type:'enemy',hp:1,data:{bullet:true,boss:'flame'}} as any)
+        if(frame.current%56===0){
+          const vy=Math.sin(num(d.t)+Math.random())*2.1
+          enemiesRef.current.push({id:id(),x:b.x-70,y:b.y,w:24,h:24,vx:-(2.8+stage*0.12),vy,type:'enemy',hp:1,data:{bullet:true,boss:'flame'}} as any)
         }
         if(b.x<W.current-230) b.x=W.current-230
       }
@@ -508,7 +512,7 @@ export default function Game(props: {
             if(!mute) synth.power(); setScore(s=>s+500)
             particlesRef.current.push(...explode(bossRef.current.x,bossRef.current.y,'#a78bfa',46))
             bossRef.current=null; setBossActive(false); setStage(s=>s+1)
-            lvl.current=makeLevel(stage+1)
+            levelCfg.current=makeLevel(stage+1)
             drones.current.push({phase:Math.random()*Math.PI*2})
             for(let k=0;k<6;k++)
               powerupsRef.current.push({id:id(),x:W.current-260+k*44,y:rnd(PADDING+80,H.current-PADDING-80),kind:(Math.random()<0.85?'weapon':'drone'),payload:pickWeaponWeighted(stage+1)})
@@ -516,7 +520,7 @@ export default function Game(props: {
         }
       }
 
-      // no contact damage, just push
+      // friendly touch: body contact pushes, doesn't harm
       const pb = {x:player.current.x,y:player.current.y,w:player.current.radius*2,h:player.current.radius*2} as any
       for(const e of enemiesRef.current){
         if(flag(e.data?.bullet)) continue
@@ -526,20 +530,20 @@ export default function Game(props: {
           e.x += (dx/d)*8; e.y += (dy/d)*8
         }
       }
-      // enemy bullets damage player
+      // bullets hurt
       for (const e of enemiesRef.current) {
         if (!flag(e.data?.bullet)) continue
         const b = e as any
         if (aabb(pb, b)) { damagePlayer(1); b.x = -9999 }
       }
 
-      /* pick-ups */
+      // pickups
       for(const pu of powerupsRef.current){
         const box={x:pu.x,y:pu.y,w:28,h:28}
         if(aabb(pb, box as any)){
           (pu as any).x=-9999; boostsCollected.current++
           if(pu.kind==='shield') player.current.shieldMs=3600
-          if(pu.kind==='speed'){ player.current.maxSpeed=Math.min(13.2,player.current.maxSpeed+0.9); rapidMs.current=5200 }
+          if(pu.kind==='speed'){ player.current.maxSpeed=Math.min(MODE.current==='touch'? 9.4 : 13.2, player.current.maxSpeed+(MODE.current==='touch'?0.5:0.9)); rapidMs.current=5200 }
           if(pu.kind==='heal'){ player.current.hp=Math.min(MAX_LIVES,player.current.hp+1); recalcTargetRadius() }
           if(pu.kind==='weapon'&&pu.payload){ const target=WEAPON_TIER.indexOf(asWeaponId(pu.payload)); if(target>weaponLevel.current) weaponLevel.current=target; rapidMs.current=5200 }
           if(pu.kind==='drone') drones.current.push({phase:Math.random()*Math.PI*2})
@@ -552,10 +556,10 @@ export default function Game(props: {
         }
       }
 
-      /* familiars / twin / barrier visuals + auto fire helpers */
-      if (barrierMs.current > 0) barrierMs.current -= 16
+      // helpers/twin/barrier
+      if (barrierMs.current > 0) barrierMs.current -= 16*dt
       if (helpersMs.current > 0) {
-        helpersMs.current -= 16
+        helpersMs.current -= 16*dt
         if (!helpersRef.current.length) {
           helpersRef.current = [
             {id:id(),x:0,y:0,phase:0},
@@ -564,7 +568,7 @@ export default function Game(props: {
           ]
         }
         for (const h of helpersRef.current) {
-          h.phase += 0.06*ts
+          h.phase += 0.06*dt
           h.x = player.current.x + Math.cos(h.phase)*50
           h.y = player.current.y + Math.sin(h.phase)*50
           if (frame.current%26===0){
@@ -574,33 +578,32 @@ export default function Game(props: {
         }
       } else helpersRef.current = []
       if (twinMs.current > 0) {
-        twinMs.current -= 16
+        twinMs.current -= 16*dt
         if (!twinRef.current) twinRef.current = {x:player.current.x+24,y:player.current.y-24,phase:0}
-        twinRef.current.x = lerp(twinRef.current.x, player.current.x+24, 0.15)
-        twinRef.current.y = lerp(twinRef.current.y, player.current.y-24, 0.15)
+        twinRef.current.x = lerp(twinRef.current.x, player.current.x+24, 0.15*dt)
+        twinRef.current.y = lerp(twinRef.current.y, player.current.y-24, 0.15*dt)
         if (frame.current-lastFire.current>8) {
           bulletsRef.current.push(bullet(twinRef.current.x, twinRef.current.y, 8, 4, Math.cos(aimAngle.current)*8, Math.sin(aimAngle.current)*8, 'blaster'))
         }
       } else twinRef.current = null
 
-      /* XP orbs */
+      // XP orbs
       for(const o of xpOrbsRef.current){
         const dx=player.current.x-o.x, dy=player.current.y-o.y
         const d=Math.max(0.001, Math.hypot(dx,dy))
-        const pull=0.06; o.vx+=dx/d*pull; o.vy+=dy/d*pull
-        o.x+=o.vx; o.y+=o.vy; o.life-=1
+        const pull=0.06*dt; o.vx+=dx/d*pull; o.vy+=dy/d*pull
+        o.x+=o.vx; o.y+=o.vy; o.life-=1*dt
         if(d<18){ xp.current+=4; o.life=0; particlesRef.current.push(spark(player.current.x,player.current.y,'#fde047',18,3)); if(!mute) synth.bonus() }
       }
       xpOrbsRef.current = xpOrbsRef.current.filter(o=>o.life>0)
 
-      /* level ups */
-      let didLevelUp = false
+      // Level-ups
       while(xp.current >= xpToNext.current){
+        leveledUpThisFrame = true
         xp.current -= xpToNext.current
         xpToNext.current = Math.floor(xpToNext.current * 1.35)
         avatarHue.current = (avatarHue.current + 28) % 360
         playerLevel.current += 1
-        didLevelUp = true
         if(weaponLevel.current < WEAPON_TIER.length-1) weaponLevel.current++
         for(let i=0;i<24;i++){
           particlesRef.current.push({ id:id(), x:player.current.x+rnd(-40,40), y:player.current.y-120+rnd(-20,20),
@@ -609,20 +612,16 @@ export default function Game(props: {
         if(!mute) synth.power()
       }
 
-      // particle step
+      // particles step + bubbles
       for (const sp of particlesRef.current) {
         const d = ensureData(sp)
-        ;(sp as any).x += num((sp as any).vx, 0)
-        ;(sp as any).y += num((sp as any).vy, 0)
-        d.life = num(d.life, 0) - 1
+        ;(sp as any).x += num((sp as any).vx, 0)*dt
+        ;(sp as any).y += num((sp as any).vy, 0)*dt
+        d.life = num(d.life, 0) - 1*dt
       }
       particlesRef.current = particlesRef.current.filter(sp => num(sp.data?.life, 0) > 0)
-
-      // bg bubbles
-      for(const bb of bubblesRef.current){ bb.y-=bb.v; if(bb.y<-10){ bb.x=rnd(0,W.current); bb.y=H.current+rnd(10,80); bb.r=rnd(2,6); bb.v=rnd(0.4,1.0) } }
-
-      // report
-      props.onProgress?.(xp.current, xpToNext.current, playerLevel.current, didLevelUp)
+      for(const bb of bubblesRef.current){ bb.y-=bb.v*dt; if(bb.y<-10){ bb.x=rnd(0,W.current); bb.y=H.current+rnd(10,80); bb.r=rnd(2,6); bb.v=rnd(0.35,0.9) } }
+onProgress?.(xp.current, xpToNext.current, playerLevel.current, leveledUpThisFrame)
 
       draw(ctx)
     }
@@ -630,7 +629,7 @@ export default function Game(props: {
     rafRef.current=requestAnimationFrame(loop)
     return ()=>{ if(rafRef.current) cancelAnimationFrame(rafRef.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[paused,mute,stage,kbAx,kbAy,gameOver])
+  },[paused,mute,stage,kbAx,kbAy,fire,gameOver])
 
   const pickWeaponWeighted=(st:number):WeaponId=>{
     const bag:WeaponId[]=['blaster','blaster','spread','piercer']
@@ -648,15 +647,15 @@ export default function Game(props: {
 
   const softReset=()=>{
     setGameOver(false)
-    player.current={x:140,y:360,vx:0,vy:0,maxSpeed:8.6,radius:BASE_R,hp:6,shieldMs:0,weapon:'blaster'}
+    player.current={x:140,y:360,vx:0,vy:0,maxSpeed: MODE.current==='touch' ? 6.6 : 8.6,radius:BASE_R,hp:6,shieldMs:0,weapon:'blaster'}
     weaponLevel.current=0; rapidMs.current=0; hasteMs.current=0; drones.current=[]
     particlesRef.current=[]; enemiesRef.current=[]; powerupsRef.current=[]; bossRef.current=null
-    lvl.current=makeLevel(stage); spawns.current=0; hitFlash.current=0; dmgBounce.current=0; shake.current=0
+    levelCfg.current=makeLevel(stage); spawns.current=0; hitFlash.current=0; dmgBounce.current=0; shake.current=0
     setScore(0); enemiesKilled.current=0; boostsCollected.current=0
     xp.current=0; xpToNext.current=40; playerLevel.current=1; avatarHue.current=38; xpGainPulse.current=0
     barrierMs.current=0; twinMs.current=0; helpersMs.current=0
 
-    // Give the player buffs immediately
+    // playful head-start
     const grant: AnyPU[] = ['weapon','speed','drone','shield','familiars','twin']
     for (let i=0;i<grant.length;i++) {
       powerupsRef.current.push({
@@ -675,7 +674,7 @@ export default function Game(props: {
     g.addColorStop(0,'#0ea5e9'); g.addColorStop(1,'#312e81')
     ctx.fillStyle=g; ctx.fillRect(0,0,w,h)
 
-    // soft light bands
+    // light bands
     ctx.globalAlpha=0.16
     for(let i=0;i<5;i++){
       const y=(Math.sin((frame.current*0.008)+(i*1.3))*0.5+0.5)*h
@@ -689,7 +688,7 @@ export default function Game(props: {
     if(hitFlash.current>0){ ctx.fillStyle=`rgba(239,68,68,${0.14+0.08*Math.sin(frame.current*0.5)})`; ctx.fillRect(0,0,w,h) }
     if(hasteMs.current>0){ ctx.fillStyle='rgba(244,63,94,0.06)'; ctx.fillRect(0,0,w,h) }
 
-    // bubbles bg
+    // bubbles
     ctx.fillStyle='rgba(255,255,255,.3)'
     for(const b of bubblesRef.current){ ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill() }
 
@@ -708,7 +707,7 @@ export default function Game(props: {
       ctx.beginPath(); ctx.arc(o.x,o.y,4,0,Math.PI*2); ctx.fill()
     }
 
-    // powerups
+    // powerups (mythics pop)
     for (const pu of powerupsRef.current) {
       ctx.save(); ctx.translate(pu.x, pu.y)
       const mythic = (pu.kind==='barrier'||pu.kind==='twin'||pu.kind==='familiars')
@@ -730,7 +729,7 @@ export default function Game(props: {
       ctx.restore()
     }
 
-    // enemies / bullets
+    // enemies & their bullets
     for(const e of enemiesRef.current){
       ctx.save(); ctx.translate((e as any).x,(e as any).y)
       const k=asEnemyKind(text((e as any).data?.kind,'jelly'))
@@ -742,9 +741,12 @@ export default function Game(props: {
         if (k==='jelly') {
           ctx.fillStyle='#67e8f9'
           roundCapsule(ctx,-16,-12,32,26,12); ctx.fill()
+          // eyes blink
+          const blink = (ensureData(e).blink? 0.15 : 1)
           ctx.fillStyle='#0b1220'; ctx.beginPath()
-          const blink = (ensureData(e).blink? 0.2 : 1)
           ctx.arc(-6,-4,3*blink,0,Math.PI*2); ctx.arc(6,-4,3*blink,0,Math.PI*2); ctx.fill()
+          // goofy smile
+          ctx.strokeStyle='rgba(0,0,0,.5)'; ctx.beginPath(); ctx.arc(0,6,6,0,Math.PI); ctx.stroke()
         } else if (k==='squid') {
           ctx.fillStyle='#f472b6'
           ctx.beginPath(); ctx.moveTo(-16,-12); ctx.quadraticCurveTo(0,-28,16,-12); ctx.quadraticCurveTo(20,8,0,22); ctx.quadraticCurveTo(-20,8,-16,-12); ctx.closePath(); ctx.fill()
@@ -752,6 +754,8 @@ export default function Game(props: {
         } else if (k==='manta') {
           ctx.fillStyle='#93c5fd'
           ctx.beginPath(); ctx.moveTo(-34,0); ctx.quadraticCurveTo(0,-24,34,0); ctx.quadraticCurveTo(0,14,-34,0); ctx.closePath(); ctx.fill()
+          // freckles
+          ctx.fillStyle='rgba(0,0,0,.25)'; ctx.beginPath(); ctx.arc(-12,-6,1.5,0,Math.PI*2); ctx.arc(12,-6,1.5,0,Math.PI*2); ctx.fill()
         } else if (k==='nautilus') {
           ctx.fillStyle='#fbbf24'
           ctx.beginPath(); ctx.arc(0,0,18,0,Math.PI*2); for(let i=0;i<8;i++){ ctx.lineTo(Math.cos(i*.8)*i*2,Math.sin(i*.8)*i*2) } ctx.fill()
@@ -762,7 +766,6 @@ export default function Game(props: {
           ctx.fillStyle='#fca5a5'
           ctx.beginPath(); ctx.ellipse(0,0,22,14,0,0,Math.PI*2); ctx.fill()
         } else if (k==='siren') {
-          // police car sea monster — blue/red strobes
           const t = frame.current * 0.25 + (e.id % 60)
           const blueOn = Math.floor(t) % 2 === 0
           ctx.fillStyle='#1f2937'
@@ -777,7 +780,7 @@ export default function Game(props: {
       ctx.restore()
     }
 
-    // player bullets (pretty trails)
+    // player bullets
     for (const b of bulletsRef.current) {
       const k = text(b.data?.kind, 'blaster') as WeaponId
       const x = (b as any).x, y = (b as any).y, w = (b as any).w, h = (b as any).h
@@ -793,7 +796,7 @@ export default function Game(props: {
       }
     }
 
-    // player + mythics
+    // player + mythic visuals
     const p=player.current
     const glow=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,36)
     glow.addColorStop(0,`hsla(${avatarHue.current},95%,75%,.95)`); glow.addColorStop(1,'rgba(254,240,138,0)')
@@ -810,8 +813,8 @@ export default function Game(props: {
 
     if(shake.current>0){ ctx.restore() }
 
-    // HUD (bilingual)
-    const L = props.lang === 'he'
+    // HUD
+    const L = lang === 'he'
       ? { score:'ניקוד', stage:'שלב', boss:'בוס', weapon:'נשק' }
       : { score:'Score', stage:'Stage', boss:'Boss', weapon:'Weapon' }
 
@@ -828,7 +831,7 @@ export default function Game(props: {
       ctx.beginPath(); ctx.arc(x,y,6,0,Math.PI*2); ctx.fill()
     }
 
-    // XP bar (animated pulse)
+    // XP bar
     const xpW=Math.min(w-160, 520), xpLeft=(w-xpW)/2, xpTop=12
     ctx.fillStyle='rgba(0,0,0,.35)'; roundCapsule(ctx,xpLeft, xpTop, xpW, 12, 6); ctx.fill()
     const xpPct=Math.max(0,Math.min(1, xp.current/xpToNext.current))
@@ -836,38 +839,10 @@ export default function Game(props: {
     xpg.addColorStop(0,`hsl(${avatarHue.current},90%,60%)`); xpg.addColorStop(1,'#fde047')
     const pad = Math.sin(frame.current*0.2)* (xpGainPulse.current>0 ? 4*xpGainPulse.current : 0)
     roundCapsule(ctx,xpLeft, xpTop, xpW*xpPct + pad, 12, 6); ctx.fillStyle=xpg; ctx.fill()
-
-    // No on-canvas touch rings (cleaner UI)
   }
 
   return (
-    <div className="game" dir={props.lang==='he'?'rtl':'ltr'}>
-      {/* Desktop arrow pad (hidden on touch devices via CSS) */}
-      <div className="arrows" aria-hidden>
-        <button className="arrow up"
-          onPointerDown={()=>{arrows.current.up=true}}
-          onPointerUp={()=>{arrows.current.up=false}}
-          onPointerLeave={()=>{arrows.current.up=false}}
-        />
-        <div className="h">
-          <button className="arrow left"
-            onPointerDown={()=>{arrows.current.left=true}}
-            onPointerUp={()=>{arrows.current.left=false}}
-            onPointerLeave={()=>{arrows.current.left=false}}
-          />
-          <button className="arrow right"
-            onPointerDown={()=>{arrows.current.right=true}}
-            onPointerUp={()=>{arrows.current.right=false}}
-            onPointerLeave={()=>{arrows.current.right=false}}
-          />
-        </div>
-        <button className="arrow down"
-          onPointerDown={()=>{arrows.current.down=true}}
-          onPointerUp={()=>{arrows.current.down=false}}
-          onPointerLeave={()=>{arrows.current.down=false}}
-        />
-      </div>
-
+    <div className="game" dir={lang==='he'?'rtl':'ltr'}>
       <canvas className="canvas" ref={canvasRef}
         onPointerDown={()=>{ if (gameOver) softReset() }} />
     </div>
