@@ -156,4 +156,6 @@ body {
 @media (pointer: coarse) {
   .joy { opacity: .44; }
 }
+/* Hide halos completely */
+.joy { display: none !important; }
 
