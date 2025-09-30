@@ -50,6 +50,15 @@ export default function App() {
 
       {/* Centered game surface */}
       <main className="stage">
+        {/* Progress UI (glowing XP bar + level badge) */}
+<div className="progress-bars" aria-hidden={false}>
+  <div className="xp-bar" title={lang === "he" ? "ניסיון" : "XP"}>
+    <div className="fill" style={{ width: `${xpPercent}%` }} />
+  </div>
+  <div className="level-bar">
+    <span>{(lang==='he' ? `רמה ${level}` : `Level ${level}`)}</span>
+  </div>
+</div>
         <Game
           lang={lang}
           // Game will call this every frame or on change:

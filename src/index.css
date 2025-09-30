@@ -137,16 +137,23 @@ body {
 .chip.active { background: #22d3ee; color: #0b1220; border-color: transparent; }
 
 /* ===== On-screen joystick hints (visual only; input is handled in Game) ===== */
+/* Joystick halos — visible on desktop and mobile (more transparent on desktop) */
 .joy {
-  position: absolute; bottom: 28px; width: 96px; height: 96px; border-radius: 50%;
-  background: radial-gradient(40% 40% at 50% 50%, rgba(34,211,238,.35), rgba(255,255,255,.06));
-  border: 2px solid rgba(255,255,255,.18);
-  box-shadow: 0 6px 30px rgba(2,6,23,.35), inset 0 0 24px rgba(34,211,238,.35);
-  pointer-events: none; /* purely decorative */
+  position: absolute;
+  bottom: 24px;
+  width: 100px; height: 100px;
+  border-radius: 50%;
+  background: radial-gradient(40% 40% at 50% 50%, rgba(34,211,238,.30), rgba(255,255,255,.04));
+  border: 2px solid rgba(255,255,255,.14);
+  box-shadow: inset 0 0 24px rgba(34,211,238,.25);
+  pointer-events: none;
+  opacity: .28;         /* desktop default */
 }
 .joy.left { left: 18px; }
 .joy.right { right: 18px; }
 
-@media (max-width: 420px) {
-  .stage { width: 96vw; height: 96dvh; }
+/* On coarse pointers (phones/tablets), make them slightly more visible */
+@media (pointer: coarse) {
+  .joy { opacity: .44; }
 }
+

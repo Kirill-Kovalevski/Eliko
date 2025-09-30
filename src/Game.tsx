@@ -1,4 +1,4 @@
-/* FULL Game.tsx — smooth arrows, twin-stick mobile, bilingual HUD, XP/Level progress */
+/* Game.tsx — smoother arrows, upgraded mobile joysticks, 360° aim, mythic buffs, sea-dragon boss, XP/Level reporting */
 import { useEffect, useRef, useState } from 'react'
 import type { Entity, PlayerState, WeaponId, PowerUpKind } from './types'
 import { clamp, lerp, rnd, id, aabb } from './utils'
@@ -6,90 +6,119 @@ import { useInput } from './useInput'
 import { synth } from './audio'
 import { makeLevel, STAGE_LENGTH } from './levels'
 
-/* ========= Types & helpers ========= */
+/* ========= small helpers ========= */
+const num = (v: any, d = 0) => { const n = Number(v); return Number.isFinite(n) ? n : d }
+const flag = (v: any) => v === true
+const text = (v: any, d = '') => (typeof v === 'string' ? v : d)
+const ensureData = <T extends { data?: Record<string, any> }>(o: T) =>
+  (o.data ??= {} as Record<string, any>)
+
+/* ========= types ========= */
 type EnemyKind = 'jelly'|'squid'|'manta'|'nautilus'|'puffer'|'crab'
 type PU = Extract<PowerUpKind,'shield'|'speed'|'heal'|'weapon'|'drone'|'haste'>
+type MythicPU = 'barrier'|'twin'|'familiars'
+type AnyPU = PU | MythicPU
 
+/* ========= constants ========= */
 const WEAPON_TIER: Readonly<WeaponId[]> =
   ['blaster','spread','piercer','laser','rail','orbitals','nova'] as const
 
 const GOOD_POOL: PU[] = ['shield','speed','heal','weapon','drone']
 const BAD_ONLY:   PU[] = ['haste']
+const MYTHIC_POOL: MythicPU[] = ['barrier','twin','familiars']
+
 const PADDING = 14
 const BASE_R  = 26
 const MAX_LIVES = 6
 
-const num = (v: any, d = 0) => { const n = Number(v); return Number.isFinite(n) ? n : d }
-const flag = (v: any) => v === true
-const text = (v: any, d = '') => (typeof v === 'string' ? v : d)
-
+/* ========= casting helpers ========= */
 const asWeaponId = (x: unknown): WeaponId =>
   (WEAPON_TIER as readonly string[]).includes(String(x)) ? (x as WeaponId) : 'blaster'
 const asEnemyKind = (x: unknown): EnemyKind => {
   const bag = ['jelly','squid','manta','nautilus','puffer','crab']
   return (bag as readonly string[]).includes(String(x)) ? (x as EnemyKind) : 'jelly'
 }
-const ensureData = <T extends { data?: Record<string, any> }>(o: T) =>
-  (o.data ??= {} as Record<string, any>)
 
-/* ========= Weapons & entity factories ========= */
-const WEAPONS: Record<WeaponId,
-  { gap:number; color:string; sfx:()=>void; onFire:(p:PlayerState)=>Entity[] }
-> = {
-  blaster:{ gap:8,  color:'#f8fafc', sfx:()=>synth.shoot(), onFire:(p)=>[bullet(p.x+18,p.y,8,4,9,'blaster')]},
-  spread: { gap:14, color:'#22d3ee', sfx:()=>synth.spread(), onFire:(p)=>[
-    bullet(p.x+18,p.y,8,4,7,'spread',{dy:-0.55}),
-    bullet(p.x+18,p.y,8,4,7,'spread',{dy:0}),
-    bullet(p.x+18,p.y,8,4,7,'spread',{dy:+0.55}),
-  ]},
-  piercer:{ gap:16, color:'#a78bfa', sfx:()=>synth.pierce(), onFire:(p)=>[bullet(p.x+20,p.y,14,5,10,'piercer',{pierce:3})]},
-  laser:  { gap:22, color:'#a78bfa', sfx:()=>synth.laser(),  onFire:(p)=>[bullet(p.x+26,p.y,18,6,12,'laser',{pierce:6,dmg:2})]},
-  rail:   { gap:34, color:'#e5e7eb', sfx:()=>synth.rail(),   onFire:(p)=>[bullet(p.x+24,p.y,4,72,16,'rail',{pierce:8,dmg:3})]},
-  orbitals:{gap:16, color:'#34d399', sfx:()=>synth.shoot(),  onFire:(p)=>[orbital(p,0),orbital(p,Math.PI)]},
-  nova:   { gap:36, color:'#fde047', sfx:()=>synth.nova(),   onFire:(p)=>nova(p)},
-}
-
-function bullet(x:number,y:number,w:number,h:number,vx:number,kind:WeaponId|string,data:Record<string,unknown>={}):Entity{
-  return { id:id(), x,y,w,h, vx, type:'bullet', data:{kind,...data} } as any
+/* ========= entities ========= */
+function bullet(
+  x:number,y:number,w:number,h:number,
+  vx:number, vy:number,
+  kind:WeaponId|string, data:Record<string,unknown>={}
+):Entity{
+  return { id:id(), x,y,w,h, vx, vy, type:'bullet', data:{kind,...data} } as any
 }
 function spark(x:number,y:number,c:string,life=26,sz=3):Entity{
   return { id:id(), x,y,w:sz,h:sz, vx:rnd(-2,2), vy:rnd(-2,2), type:'spark', data:{life,color:c} } as any
 }
 function explode(x:number,y:number,c:string,n=16){ const out:Entity[]=[]; for(let i=0;i<n;i++) out.push(spark(x,y,c,18+Math.random()*16,2+Math.random()*2)); return out }
-function orbital(p:PlayerState,phase:number){ return bullet(p.x+18,p.y,8,8,7,'orbitals',{orb:true,phase}) }
-function nova(p:PlayerState){ const out:Entity[]=[]; for(let i=-3;i<=3;i++) out.push(bullet(p.x+12,p.y,8,8,7,'nova',{dy:i*0.6,pierce:2})); return out }
+function orbital(p:PlayerState,phase:number){ return bullet(p.x+18,p.y,8,8,7,0,'orbitals',{orb:true,phase}) }
+function novaFan(p:PlayerState,ang:number){ // nova uses angle fan around aim
+  const out:Entity[]=[]; for(let i=-3;i<=3;i++){ const a=ang+i*0.35; out.push(bullet(p.x+12,p.y,8,8,Math.cos(a)*7,Math.sin(a)*7,'nova',{pierce:2})) }
+  return out
+}
 
 function enemy(kind:EnemyKind,x:number,y:number,speed:number,hp=1,heavy=false):Entity{
   const sizes:Record<EnemyKind,{w:number;h:number}> = {
     jelly:{w:40,h:40}, squid:{w:46,h:52}, manta:{w:68,h:36}, nautilus:{w:48,h:48}, puffer:{w:38,h:38}, crab:{w:52,h:32}
   }
-  const s=sizes[kind]; return { id:id(), x,y,w:s.w,h:s.h, vx:-speed, type:'enemy', hp, data:{kind,t:0,heavy} } as any
+  const s=sizes[kind]; return { id:id(), x,y,w:s.w,h:s.h, vx:-speed, vy:0, type:'enemy', hp, data:{kind,t:0,heavy} } as any
 }
 function boss(x:number,y:number,hp:number):Entity{
-  return { id:id(), x,y,w:200,h:140, vx:-1.05, type:'boss', hp, data:{phase:1,t:0,aura:1} } as any
+  // friendly sea-dragon look (glow); logic stays hostile
+  return { id:id(), x,y,w:220,h:140, vx:-0.9, vy:0, type:'boss', hp, data:{phase:1,t:0,aura:1} } as any
 }
 
-/* ========= Drawing helpers ========= */
-function wavyTentacle(ctx:CanvasRenderingContext2D,x:number,y:number,length:number,segments:number,amplitude=10,color='#6b21a8'){
-  ctx.save(); ctx.beginPath(); ctx.moveTo(x,y)
-  for(let i=0;i<=segments;i++){ const t=i/segments; ctx.lineTo(x+t*length, y+Math.sin(t*Math.PI*2)*amplitude*(1-t)) }
-  ctx.strokeStyle=color; ctx.lineWidth=4; ctx.shadowBlur=12; ctx.shadowColor=color; ctx.stroke(); ctx.restore()
+/* ========= weapon map (now angle-aware) ========= */
+type FireFn = (p:PlayerState, ang:number)=>Entity[]
+const WEAPONS: Record<WeaponId, { gap:number; sfx:()=>void; onFire:FireFn }> = {
+  blaster:{ gap:8,  sfx:()=>synth.shoot(), onFire:(p,ang)=>[
+    bullet(p.x+18,p.y,8,4, Math.cos(ang)*9, Math.sin(ang)*9,'blaster')
+  ]},
+  spread: { gap:14, sfx:()=>synth.spread(), onFire:(p,ang)=>[
+    bullet(p.x+18,p.y,8,4, Math.cos(ang-0.18)*7, Math.sin(ang-0.18)*7,'spread'),
+    bullet(p.x+18,p.y,8,4, Math.cos(ang)*7,      Math.sin(ang)*7,     'spread'),
+    bullet(p.x+18,p.y,8,4, Math.cos(ang+0.18)*7, Math.sin(ang+0.18)*7,'spread'),
+  ]},
+  piercer:{ gap:16, sfx:()=>synth.pierce(), onFire:(p,ang)=>[
+    bullet(p.x+20,p.y,14,5, Math.cos(ang)*10, Math.sin(ang)*10,'piercer',{pierce:3})
+  ]},
+  laser:  { gap:22, sfx:()=>synth.laser(),  onFire:(p,ang)=>[
+    bullet(p.x+26,p.y,18,6, Math.cos(ang)*12, Math.sin(ang)*12,'laser',{pierce:6,dmg:2})
+  ]},
+  rail:   { gap:34, sfx:()=>synth.rail(),   onFire:(p,ang)=>[
+    bullet(p.x+24,p.y,4,72, Math.cos(ang)*16, Math.sin(ang)*16,'rail',{pierce:8,dmg:3})
+  ]},
+  orbitals:{gap:16, sfx:()=>synth.shoot(),  onFire:(p)=>[orbital(p,0),orbital(p,Math.PI)]},
+  nova:   { gap:36, sfx:()=>synth.nova(),   onFire:(p,ang)=>novaFan(p,ang)},
 }
-function fireTentacle(ctx:CanvasRenderingContext2D,x:number,y:number,length:number,segments:number,amplitude=12){
-  wavyTentacle(ctx,x,y,length,segments,amplitude,'#ef4444'); ctx.strokeStyle='#f97316'; ctx.shadowBlur=20; ctx.shadowColor='#f59e0b'; ctx.stroke()
-}
-function goldTentacle(ctx:CanvasRenderingContext2D,x:number,y:number,length:number,segments:number,amplitude=8){
-  wavyTentacle(ctx,x,y,length,segments,amplitude,'#facc15'); ctx.strokeStyle='#fde047'; ctx.shadowBlur=18; ctx.shadowColor='#fef08a'; ctx.stroke()
-}
-function oceanTentacle(ctx:CanvasRenderingContext2D,x:number,y:number,length:number,segments:number,amplitude=14){
-  wavyTentacle(ctx,x,y,length,segments,amplitude,'#3b82f6'); ctx.strokeStyle='#06b6d4'; ctx.shadowBlur=22; ctx.shadowColor='#67e8f9'; ctx.stroke()
-}
+
+/* ========= drawing helpers ========= */
 function roundCapsule(ctx:CanvasRenderingContext2D, x:number, y:number, w:number, h:number, r:number){
   const rr = Math.min(r, h/2); ctx.beginPath(); ctx.moveTo(x+rr, y); ctx.lineTo(x+w-rr, y)
   ctx.arc(x+w-rr, y+rr, rr, -Math.PI/2, Math.PI/2); ctx.lineTo(x+rr, y+h); ctx.arc(x+rr, y+rr, rr, Math.PI/2, -Math.PI/2); ctx.closePath()
 }
-function drawSeaDragonBullet(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, vx: number, dy: number){
-  const ang = Math.atan2(dy || 0, Math.max(0.01, vx || 8))
+function drawSeaDragon(ctx: CanvasRenderingContext2D, x:number, y:number, t:number){
+  // friendly glowing sea-dragon (boss body)
+  ctx.save(); ctx.translate(x, y)
+  ctx.shadowColor = 'rgba(56,189,248,.8)'; ctx.shadowBlur = 24
+  const path = new Path2D()
+  path.moveTo(-100, 0)
+  for(let i=0;i<=12;i++){
+    const px = -100 + i*18
+    const py = Math.sin((i*0.6)+t)*18*(1 - i/14)
+    if(i===0) path.moveTo(px,py); else path.lineTo(px,py)
+  }
+  ctx.strokeStyle = 'rgba(59,130,246,.9)'; ctx.lineWidth = 16; ctx.lineCap='round'
+  ctx.stroke(path)
+  ctx.shadowBlur = 0
+  // head
+  ctx.fillStyle = '#e0f2fe'
+  roundCapsule(ctx, 10, -18, 44, 36, 12); ctx.fill()
+  ctx.fillStyle = '#0b1220'; ctx.beginPath(); ctx.arc(46, -6, 3, 0, Math.PI*2); ctx.arc(46, 6, 3, 0, Math.PI*2); ctx.fill()
+  ctx.restore()
+}
+function drawSeaDragonBullet(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, vx: number, vy: number){
+  const ang = Math.atan2(vy || 0, Math.max(0.01, vx || 8))
   ctx.save(); ctx.translate(x, y); ctx.rotate(ang)
   const tail = ctx.createLinearGradient(-w*1.6, 0, w*0.5, 0)
   tail.addColorStop(0, 'hsla(190, 90%, 65%, 0)'); tail.addColorStop(1, 'hsla(190, 95%, 72%, .55)')
@@ -104,32 +133,8 @@ function drawSeaDragonBullet(ctx: CanvasRenderingContext2D, x: number, y: number
   ctx.fillStyle = '#0b1220'; ctx.beginPath(); ctx.arc(w*0.35, -h*0.18, Math.max(1.5, h*0.12), 0, Math.PI*2); ctx.fill()
   ctx.restore()
 }
-function roundedRect(ctx:CanvasRenderingContext2D,x:number,y:number,w:number,h:number,r:number){
-  const rr=Math.min(r,w/2,h/2); ctx.beginPath()
-  ctx.moveTo(x+rr,y); ctx.arcTo(x+w,y,x+w,y+h,rr); ctx.arcTo(x+w,y+h,x,y+h,rr)
-  ctx.arcTo(x,y+h,x,y,rr); ctx.arcTo(x,y,x+w,y,rr); ctx.closePath()
-}
-function roundedBlob(ctx:CanvasRenderingContext2D,x:number,y:number,w:number,h:number,r:number){ roundedRect(ctx,x,y,w,h,r) }
-function squidShape(ctx:CanvasRenderingContext2D,w:number,h:number){
-  ctx.beginPath(); ctx.moveTo(-w*0.2,-h*0.3); ctx.quadraticCurveTo(0,-h*0.6,w*0.2,-h*0.3)
-  ctx.quadraticCurveTo(w*0.3,0,0,h*0.4); ctx.quadraticCurveTo(-w*0.3,0,-w*0.2,-h*0.3); ctx.closePath()
-}
-function mantaShape(ctx:CanvasRenderingContext2D,w:number,h:number){
-  ctx.beginPath(); ctx.moveTo(-w*0.5,0); ctx.quadraticCurveTo(0,-h*0.8,w*0.5,0); ctx.quadraticCurveTo(0,h*0.4,-w*0.5,0); ctx.closePath()
-}
-function nautilusShape(ctx:CanvasRenderingContext2D,w:number){
-  ctx.beginPath(); ctx.arc(0,0,w*0.35,0,Math.PI*2); ctx.moveTo(0,0); for(let i=0;i<8;i++){ ctx.lineTo(Math.cos(i*.8)*i*2,Math.sin(i*.8)*i*2) }
-}
-function pufferShape(ctx:CanvasRenderingContext2D,w:number,h:number){
-  ctx.beginPath(); ctx.arc(0,0,Math.max(w,h)/2,0,Math.PI*2)
-  for(let i=0;i<10;i++){ const a=i*(Math.PI*2/10); ctx.moveTo(Math.cos(a)*w*0.6,Math.sin(a)*h*0.6); ctx.lineTo(Math.cos(a)*w*0.8,Math.sin(a)*h*0.8) }
-}
-function crabShape(ctx:CanvasRenderingContext2D,w:number,h:number){
-  ctx.beginPath(); ctx.ellipse(0,0,w*0.5,h*0.35,0,0,Math.PI*2)
-  for(let i=-2;i<=2;i++){ ctx.moveTo(-w*0.3+i*8,h*0.2); ctx.lineTo(-w*0.3+i*8,h*0.35) }
-}
 
-/* ========= Component ========= */
+/* ========= component ========= */
 export default function Game(props: {
   lang: 'he' | 'en'
   onProgress?: (xp: number, xpNeeded: number, level: number, didLevelUp: boolean) => void
@@ -145,29 +150,26 @@ export default function Game(props: {
   const [stage,setStage] = useState(1)
   const [bossActive,setBossActive] = useState(false)
 
-  // Input (WASD + Arrows + Space) + our touch overrides
   const { fire, ax, ay } = useInput()
 
-  // Canvas sizing
   const W = useRef(760), H = useRef(980), dpr = useRef(1)
-
-  // Game state refs
-  const levelCfg = useRef(makeLevel(stage))
+  const lvl = useRef(makeLevel(stage))
   const spawns = useRef(0)
+
   const player = useRef<PlayerState>({ x:140, y:360, vx:0, vy:0, maxSpeed:7.5, radius:BASE_R, hp:6, shieldMs:0, weapon:'blaster' })
   const targetRadius = useRef(BASE_R)
   const weaponLevel = useRef(0)
 
-  // Progress (reported to App)
+  // Progress up to App
   const xp = useRef(0)
-  const xpToNext = useRef(40) // App should start with same default
-  const playerLevel = useRef(1) // report this to App
+  const xpToNext = useRef(40)
+  const playerLevel = useRef(1)
   const avatarHue = useRef(38)
   const xpOrbsRef = useRef<Array<{id:number;x:number;y:number;vx:number;vy:number;life:number}>>([])
 
   const bulletsRef = useRef<Entity[]>([])
   const enemiesRef = useRef<Entity[]>([])
-  const powerupsRef = useRef<Array<{id:number;x:number;y:number;kind:PU;payload?:WeaponId}>>([])
+  const powerupsRef = useRef<Array<{id:number;x:number;y:number;kind:AnyPU;payload?:WeaponId}>>([])
   const bossRef = useRef<Entity|null>(null)
   const particlesRef = useRef<Entity[]>([])
   const drones = useRef<{phase:number}[]>([])
@@ -187,16 +189,24 @@ export default function Game(props: {
   const killStreak = useRef(0)
   const bubblesRef = useRef<{x:number;y:number;r:number;v:number}[]>([])
 
-  // === Mobile twin-stick refs (local to component) ===
+  // Mythic effects
+  const barrierMs = useRef(0)
+  const twinMs = useRef(0)
+  const helpersMs = useRef(0)
+  const helpersRef  = useRef<Array<{id:number;x:number;y:number;phase:number}>>([])
+  const twinRef     = useRef<{x:number;y:number;phase:number}|null>(null)
+
+  // Twin-stick (better)
   const moveTouchId = useRef<number|null>(null)
   const aimTouchId  = useRef<number|null>(null)
   const moveOrigin  = useRef<{x:number;y:number}|null>(null)
   const aimOrigin   = useRef<{x:number;y:number}|null>(null)
   const touchAx = useRef(0), touchAy = useRef(0)
   const aimAngle = useRef(0)
+  const aimMag   = useRef(0)
   const touchFiring = useRef(false)
 
-  /* ======== Layout / resize ======== */
+  /* ====== sizing ====== */
   useEffect(()=>{
     const c=canvasRef.current!, ctx=c.getContext('2d')!
     const onResize=()=>{
@@ -214,7 +224,7 @@ export default function Game(props: {
     return ()=>window.removeEventListener('resize',onResize)
   },[])
 
-  /* ======== Keyboard toggles (no on-screen instructions) ======== */
+  /* ====== kb toggles ====== */
   useEffect(()=>{
     const onKey=(e:KeyboardEvent)=>{
       const k=e.key.toLowerCase()
@@ -226,13 +236,23 @@ export default function Game(props: {
     return ()=>window.removeEventListener('keydown',onKey)
   },[mute,gameOver])
 
-  /* ======== Touch & mouse aim handlers (twin-stick) ======== */
+  /* ====== improved joysticks ====== */
   useEffect(()=>{
     const c = canvasRef.current!
     const getLocal = (ev: Touch | MouseEvent) => {
       const r = c.getBoundingClientRect()
       return { x: (ev.clientX - r.left), y: (ev.clientY - r.top) }
     }
+    const R = 70;         // joystick radius
+    const DZ = 10;        // deadzone
+    const toVec = (ox:number, oy:number, x:number, y:number) => {
+      const dx = x-ox, dy = y-oy
+      let len = Math.hypot(dx,dy)
+      const ang = Math.atan2(dy,dx)
+      const mag = len <= DZ ? 0 : Math.min(1, (len-DZ)/(R-DZ))
+      return { ang, mag, nx: Math.cos(ang)*mag, ny: Math.sin(ang)*mag }
+    }
+
     const onTouchStart = (e: TouchEvent) => {
       for (const t of Array.from(e.changedTouches)) {
         const local = getLocal(t as any)
@@ -251,19 +271,16 @@ export default function Game(props: {
       for (const t of Array.from(e.changedTouches)) {
         if (t.identifier === moveTouchId.current && moveOrigin.current) {
           const local = getLocal(t as any)
-          const dx = local.x - moveOrigin.current.x
-          const dy = local.y - moveOrigin.current.y
-          const len = Math.max(1, Math.hypot(dx, dy))
-          const mag = Math.min(1, len / 60) // joystick radius
-          touchAx.current = (dx / len) * mag
-          touchAy.current = (dy / len) * mag
+          const v = toVec(moveOrigin.current.x, moveOrigin.current.y, local.x, local.y)
+          touchAx.current = v.nx
+          touchAy.current = v.ny
         }
-        if (t.identifier === aimTouchId.current) {
+        if (t.identifier === aimTouchId.current && aimOrigin.current) {
           const local = getLocal(t as any)
-          const dx = local.x - player.current.x
-          const dy = local.y - player.current.y
-          aimAngle.current = Math.atan2(dy, dx)
-          touchFiring.current = true
+          const v = toVec(aimOrigin.current.x, aimOrigin.current.y, local.x, local.y)
+          aimAngle.current = v.ang
+          aimMag.current = v.mag
+          touchFiring.current = v.mag > 0.25
         }
       }
     }
@@ -277,15 +294,19 @@ export default function Game(props: {
         if (t.identifier === aimTouchId.current) {
           aimTouchId.current = null
           aimOrigin.current = null
+          aimMag.current = 0
           touchFiring.current = false
         }
       }
     }
+
+    // Desktop: mouse to aim
     const onMouseMove = (e: MouseEvent) => {
       const local = getLocal(e)
       const dx = local.x - player.current.x
       const dy = local.y - player.current.y
       aimAngle.current = Math.atan2(dy, dx)
+      aimMag.current = 1
     }
     const onMouseDown = () => { touchFiring.current = true }
     const onMouseUp   = () => { touchFiring.current = false }
@@ -311,11 +332,11 @@ export default function Game(props: {
     }
   },[])
 
-  /* ======== Main game loop ======== */
+  /* ====== loop ====== */
   useEffect(()=>{
     const c=canvasRef.current!, ctx=c.getContext('2d')!
     if(!bubblesRef.current.length){
-      for(let i=0;i<48;i++) bubblesRef.current.push({x:rnd(0,W.current),y:rnd(0,H.current),r:rnd(2,6),v:rnd(0.4,1.2)})
+      for(let i=0;i<48;i++) bubblesRef.current.push({x:rnd(0,W.current),y:rnd(0,H.current),r:rnd(2,6),v:rnd(0.4,1.0)})
     }
 
     const recalcTargetRadius=()=>{ const t=Math.max(1,player.current.hp)/MAX_LIVES; targetRadius.current=BASE_R*(0.32+0.68*t) }
@@ -336,121 +357,117 @@ export default function Game(props: {
 
       frame.current++
 
-      const ts=(hasteMs.current>0?1.35:1)
+      const ts=(hasteMs.current>0?1.25:1) // haste a bit milder now
       if(hasteMs.current>0) hasteMs.current-=16
       if(rapidMs.current>0) rapidMs.current-=16
       if(hitFlash.current>0) hitFlash.current-=1
       if(dmgBounce.current>0) dmgBounce.current=Math.max(0,dmgBounce.current-0.08)
 
-      const accel=0.2
-
-      // Axes: keyboard base (WASD + ARROWS from useInput)
-      let axEff = ax
-      let ayEff = ay
-      // If phone joystick active, override keyboard axes
-      if (moveTouchId.current !== null) {
-        axEff = touchAx.current
-        ayEff = touchAy.current
-      }
-
-      // Smooth movement (lerped velocity)
+      /* movement */
+      const accel=0.22
+      let axEff = ax, ayEff = ay
+      if (moveTouchId.current !== null) { axEff = touchAx.current; ayEff = touchAy.current }
       player.current.vx=lerp(player.current.vx, axEff*player.current.maxSpeed,accel)
       player.current.vy=lerp(player.current.vy, ayEff*player.current.maxSpeed,accel)
       player.current.x=clamp(player.current.x+player.current.vx, PADDING+player.current.radius, W.current-PADDING-player.current.radius)
       player.current.y=clamp(player.current.y+player.current.vy, PADDING+player.current.radius, H.current-PADDING-player.current.radius)
 
-      const weaponId=WEAPON_TIER[Math.min(weaponLevel.current,WEAPON_TIER.length-1)]
-      player.current.weapon=weaponId
-
-      const isFiring = fire || weaponId === 'orbitals' || touchFiring.current
+      /* aim basis */
+      if (aimTouchId.current===null && aimMag.current<0.01) {
+        // fall back: aim where we're moving or to the right
+        const mvLen = Math.hypot(player.current.vx, player.current.vy)
+        aimAngle.current = mvLen>0.1 ? Math.atan2(player.current.vy, player.current.vx) : 0
+      }
 
       player.current.radius=lerp(player.current.radius,targetRadius.current,0.25)*(1+dmgBounce.current*0.2)
       player.current.radius=Math.max(12,player.current.radius)
       if(player.current.shieldMs>0) player.current.shieldMs-=16
       if(shake.current>0) shake.current=Math.max(0,shake.current-0.8)
 
-      // drones orbit & fire
-      for(const d of drones.current){
-        d.phase+=0.055*ts
-        if(frame.current%22===0){
-          bulletsRef.current.push(bullet(player.current.x+Math.cos(d.phase)*28,player.current.y+Math.sin(d.phase)*28,7,7,8,'blaster'))
-          if(!mute) synth.shoot()
-        }
-      }
-
-      // player fire cadence
+      /* weapon + firing */
+      const weaponId=WEAPON_TIER[Math.min(weaponLevel.current,WEAPON_TIER.length-1)]
+      player.current.weapon=weaponId
       const config=WEAPONS[weaponId]
       const gapBoost=rapidMs.current>0?0.65:1
       const effectiveGap=Math.max(4,Math.floor(config.gap*gapBoost))
-      if(isFiring && frame.current-lastFire.current>effectiveGap*ts){
-        for(const b of config.onFire(player.current)) bulletsRef.current.push(b)
+      const wantsFire = fire || weaponId==='orbitals' || touchFiring.current
+      if(wantsFire && frame.current-lastFire.current>effectiveGap*ts){
+        for(const b of config.onFire(player.current, aimAngle.current)) bulletsRef.current.push(b)
         lastFire.current=frame.current; if(!mute) config.sfx()
       }
-
       // orbitals follow
       for(const b of bulletsRef.current) if(flag(b.data?.orb)){
         const bd=ensureData(b); const ph=num(bd.phase,0)+0.14; bd.phase=ph; b.y=player.current.y+Math.sin(ph)*26; b.x+=7
       }
 
-      // spawns
-      const lv=levelCfg.current
-      const spawnEvery=Math.max(12,Math.floor(lv.spawnEvery*(hasteMs.current>0?0.85:1)))
-      if(!bossActive && frame.current%Math.floor(spawnEvery)===0){
+      /* spawns: slower pace */
+      const l=lvl.current
+      const slowerSpawn = 1.35  // >1 => spawn less often
+      const spawnEvery=Math.max(16,Math.floor(l.spawnEvery*slowerSpawn*(hasteMs.current>0?0.85:1)))
+      if(!bossActive && frame.current%spawnEvery===0){
         const y=rnd(PADDING+60,H.current-PADDING-60)
         const kind=asEnemyKind(pickEnemyKind(stage))
         const heavy=kind==='nautilus'||kind==='crab'
-        const hp=heavy? lv.enemyHp+2 : (kind==='puffer'? lv.enemyHp+1 : lv.enemyHp)
-        enemiesRef.current.push(enemy(kind,W.current+60,y,lv.speed*ts*1.05,hp,heavy))
+        const hp=heavy? l.enemyHp+2 : (kind==='puffer'? l.enemyHp+1 : l.enemyHp)
+        const slowerSpeed = 0.85
+        enemiesRef.current.push(enemy(kind,W.current+60,y,l.speed*ts*slowerSpeed,hp,heavy))
         spawns.current++
 
-        const roll=Math.random()
-        if(roll<0.16+Math.min(0.18,killStreak.current*0.006)){
-          const isBad=Math.random()<0.3
-          const kindPU=(isBad?BAD_ONLY:GOOD_POOL)[Math.floor(Math.random()*(isBad?BAD_ONLY.length:GOOD_POOL.length))]
-          powerupsRef.current.push({id:id(),x:W.current+50,y,kind:kindPU,payload:pickWeaponWeighted(stage)})
+        // Buffs more frequent + mythics occasionally
+        const base = 0.32 + Math.min(0.30, killStreak.current*0.008) // 32%..62%
+        if(Math.random() < base){
+          const mythic = Math.random() < 0.12 // 12% of the time drop a mythic
+          if (mythic) {
+            powerupsRef.current.push({id:id(),x:W.current+50,y,kind:MYTHIC_POOL[Math.floor(Math.random()*MYTHIC_POOL.length)]})
+          } else {
+            const isBad = Math.random() < 0.22 // occasional haste
+            const kindPU=(isBad?BAD_ONLY:GOOD_POOL)[Math.floor(Math.random()*(isBad?BAD_ONLY.length:GOOD_POOL.length))]
+            powerupsRef.current.push({id:id(),x:W.current+50,y,kind:kindPU,payload:pickWeaponWeighted(stage)})
+          }
         }
       }
 
       if(!bossActive && spawns.current>=STAGE_LENGTH){
-        bossRef.current=boss(W.current+200,H.current/2,lv.bossHp+80)
+        bossRef.current=boss(W.current+220,H.current/2,l.bossHp+120)
         setBossActive(true); spawns.current=0
       }
 
-      // bullets move
-      for(const sp of bulletsRef.current){ sp.x+=num(sp.vx,0)*ts; const ddy=num(sp.data?.dy,0); if(ddy) sp.y+=ddy*ts }
-      bulletsRef.current=bulletsRef.current.filter(sp=>sp.x<W.current+140 && sp.y>-80 && sp.y<H.current+80)
+      /* bullets move */
+      for(const sp of bulletsRef.current){ sp.x+=num(sp.vx,0)*ts; sp.y+=num(sp.vy,0)*ts }
+      bulletsRef.current=bulletsRef.current.filter(sp=>sp.x<W.current+140 && sp.x>-140 && sp.y>-80 && sp.y<H.current+80)
 
-      // enemies AI & shots
+      /* enemies AI */
       for (const e of enemiesRef.current) {
         const d = ensureData(e)
         const k = asEnemyKind(text(d.kind,'jelly'))
         d.t = num(d.t,0) + 0.03*ts
         if (k === 'jelly') {
-          e.x += num(e.vx,0)*ts*0.75; e.y += Math.sin(num(d.t)*2.0)*2.6
+          e.x += num(e.vx,0)*ts*0.70; e.y += Math.sin(num(d.t)*2.0)*2.2
         } else if (k === 'squid') {
-          e.x += num(e.vx,0)*ts*1.2;  e.y += Math.sin(num(d.t)*3.0)*1.8
+          e.x += num(e.vx,0)*ts*1.05;  e.y += Math.sin(num(d.t)*3.0)*1.6
         } else if (k === 'manta') {
-          e.x += num(e.vx,0)*ts*1.05; e.y += Math.sin(num(d.t)*1.2)*3.2
+          e.x += num(e.vx,0)*ts*0.95; e.y += Math.sin(num(d.t)*1.2)*2.6
         } else if (k === 'nautilus') {
-          e.x += num(e.vx,0)*ts*0.9
-          if (frame.current % 46 === 0) {
+          e.x += num(e.vx,0)*ts*0.85
+          if (frame.current % 52 === 0) {
             const ang = num(d.t) * 3.14
-            enemiesRef.current.push({ id:id(), x:e.x-20, y:e.y, w:20, h:20, vx:-4.4, vy:Math.sin(ang)*2.4, type:'enemy', hp:1, data:{ bullet:true } } as any)
+            enemiesRef.current.push({ id:id(), x:e.x-20, y:e.y, w:20, h:20, vx:-3.9, vy:Math.sin(ang)*2.0, type:'enemy', hp:1, data:{ bullet:true } } as any)
           }
         } else if (k === 'puffer') {
-          e.x += num(e.vx,0)*ts; d.scale = 1 + Math.sin(num(d.t)*3)*0.25
+          e.x += num(e.vx,0)*ts; d.scale = 1 + Math.sin(num(d.t)*2.6)*0.22
         } else if (k === 'crab') {
-          e.x += num(e.vx,0)*ts*1.15; e.y += Math.sin(num(d.t)*2.6)*1.2
+          e.x += num(e.vx,0)*ts*0.98; e.y += Math.sin(num(d.t)*2.2)*1.0
         }
 
+        // enemy shooting: a bit slower
         if (!flag(e.data?.bullet)) {
           const shootable = (k === 'squid' || k === 'crab' || k === 'manta')
-          if (shootable && frame.current % 34 === 0 && Math.random() < 0.20) {
+          if (shootable && frame.current % 42 === 0 && Math.random() < 0.16) {
             const lead = 14
             const dx = (player.current.x + player.current.vx * lead) - e.x
             const dy = (player.current.y + player.current.vy * lead) - e.y
             const dlen = Math.max(0.001, Math.hypot(dx, dy))
-            const speed = 4.0 + stage * 0.08
+            const speed = 3.6 + stage * 0.06
             enemiesRef.current.push({
               id: id(), x: e.x, y: e.y, w: 14, h: 8,
               vx: (dx / dlen) * speed, vy: (dy / dlen) * speed,
@@ -460,25 +477,27 @@ export default function Game(props: {
         }
       }
 
-      // boss patterns & bullets move
+      /* boss */
       if(bossRef.current){
         const b=bossRef.current, d=ensureData(b)
-        b.x+=-1.05*ts; d.t=num(d.t,0)+0.02; d.aura=0.8+0.2*Math.sin(frame.current*0.08)
-        b.y=H.current/2+Math.sin(num(d.t))*(82+12*stage)
-        if(frame.current%Math.max(12,34-stage*2)===0){
+        b.x+=-0.9*ts; d.t=num(d.t,0)+0.02; d.aura=0.8+0.2*Math.sin(frame.current*0.08)
+        b.y=H.current/2+Math.sin(num(d.t))*(72+10*stage)
+        // friendly sea-dragon patterns
+        if(frame.current%Math.max(16,40-stage*2)===0){
           for(let i=-1;i<=1;i++){
-            enemiesRef.current.push({id:id(),x:b.x-60,y:b.y+i*20,w:18,h:6,vx:-(4.6+stage*0.15),vy:i*0.6,type:'enemy',hp:1,data:{bullet:true,boss:'spear'}} as any)
+            const a = Math.sin(num(d.t)+i)*0.4
+            enemiesRef.current.push({id:id(),x:b.x-60,y:b.y+i*20,w:18,h:6,vx:Math.cos(Math.PI+a)* (4.0+stage*0.12),vy:Math.sin(Math.PI+a)*1.1,type:'enemy',hp:1,data:{bullet:true,boss:'spear'}} as any)
           }
         }
         if(frame.current%64===0){
           const n=10; for(let i=0;i<n;i++){
             const ang=i*(Math.PI*2/n)
-            enemiesRef.current.push({id:id(),x:b.x-40,y:b.y,w:10,h:10,vx:Math.cos(ang)*(-3.5-stage*0.08),vy:Math.sin(ang)*2.2,type:'enemy',hp:1,data:{bullet:true,boss:'ring'}} as any)
+            enemiesRef.current.push({id:id(),x:b.x-40,y:b.y,w:10,h:10,vx:Math.cos(ang)*(-3.1-stage*0.07),vy:Math.sin(ang)*2.0,type:'enemy',hp:1,data:{bullet:true,boss:'ring'}} as any)
           }
         }
-        if(frame.current%42===0){
-          const vy=Math.sin(num(d.t)+Math.random())*2.8
-          enemiesRef.current.push({id:id(),x:b.x-70,y:b.y,w:24,h:24,vx:-(3.2+stage*0.18),vy,type:'enemy',hp:1,data:{bullet:true,boss:'flame'}} as any)
+        if(frame.current%54===0){
+          const vy=Math.sin(num(d.t)+Math.random())*2.3
+          enemiesRef.current.push({id:id(),x:b.x-70,y:b.y,w:24,h:24,vx:-(2.9+stage*0.14),vy,type:'enemy',hp:1,data:{bullet:true,boss:'flame'}} as any)
         }
         if(b.x<W.current-230) b.x=W.current-230
       }
@@ -486,7 +505,7 @@ export default function Game(props: {
         e.x += num(e.vx, 0) * ts; e.y += num(e.vy, 0) * ts
       }
 
-      // collisions: bullets vs enemies/boss
+      /* collisions */
       for(const b of bulletsRef.current){
         for(const e of enemiesRef.current){
           if(flag(e.data?.bullet)) continue
@@ -501,12 +520,6 @@ export default function Game(props: {
               for(let i=0;i<Math.floor(rnd(3,6));i++){
                 xpOrbsRef.current.push({id:id(),x:e.x,y:e.y, vx:rnd(-1.2,1.2),vy:rnd(-1.2,1.2), life:240})
               }
-              if(killsSincePower.current>=killsNeeded.current){
-                killsSincePower.current=0; killsNeeded.current += 5
-                if(Math.random()<0.7 && weaponLevel.current<WEAPON_TIER.length-1){
-                  weaponLevel.current++; if(!mute) synth.power()
-                }
-              }
             }
           }
         }
@@ -519,7 +532,7 @@ export default function Game(props: {
             if(!mute) synth.power(); setScore(s=>s+500)
             particlesRef.current.push(...explode(bossRef.current.x,bossRef.current.y,'#a78bfa',46))
             bossRef.current=null; setBossActive(false); setStage(s=>s+1)
-            levelCfg.current=makeLevel(stage+1)
+            lvl.current=makeLevel(stage+1)
             drones.current.push({phase:Math.random()*Math.PI*2})
             for(let k=0;k<6;k++)
               powerupsRef.current.push({id:id(),x:W.current-260+k*44,y:rnd(PADDING+80,H.current-PADDING-80),kind:(Math.random()<0.85?'weapon':'drone'),payload:pickWeaponWeighted(stage+1)})
@@ -527,28 +540,73 @@ export default function Game(props: {
         }
       }
 
-      // player collisions
-      const pb = {x:player.current.x,y:player.current.y,w:player.current.radius*2,h:player.current.radius*2} as any
-      for(const e of enemiesRef.current) if(aabb(pb,e)){ damagePlayer(flag(e.data?.heavy)?2:1); (e as any).x=-9999 }
-      if(bossRef.current && aabb(pb,bossRef.current)) damagePlayer(2)
+      /* player touch barrier (mythic) */
+      if (barrierMs.current > 0) {
+        barrierMs.current -= 16
+        const r = player.current.radius + 40
+        for (const e of enemiesRef.current) {
+          if (flag(e.data?.bullet)) continue
+          const dx = e.x - player.current.x, dy = e.y - player.current.y
+          if (dx*dx + dy*dy < (r*r)) {
+            ;(e as any).hp = num((e as any).hp,1) - 1
+            if (num((e as any).hp,0) <= 0) (e as any).x = -9999
+          }
+        }
+      }
 
-      // powerups collect
+      /* familiars (mythic) */
+      if (helpersMs.current > 0) {
+        helpersMs.current -= 16
+        if (!helpersRef.current.length) {
+          helpersRef.current = [
+            {id:id(),x:0,y:0,phase:0},
+            {id:id(),x:0,y:0,phase:Math.PI*2/3},
+            {id:id(),x:0,y:0,phase:Math.PI*4/3},
+          ]
+        }
+        for (const h of helpersRef.current) {
+          h.phase += 0.05*ts
+          h.x = player.current.x + Math.cos(h.phase)*48
+          h.y = player.current.y + Math.sin(h.phase)*48
+          if (frame.current%26===0){
+            bulletsRef.current.push(bullet(h.x, h.y, 7, 7, Math.cos(aimAngle.current)*8, Math.sin(aimAngle.current)*8, 'blaster'))
+            if(!mute) synth.shoot()
+          }
+        }
+      } else helpersRef.current = []
+
+      /* twin (mythic) mirrors fire */
+      if (twinMs.current > 0) {
+        twinMs.current -= 16
+        if (!twinRef.current) twinRef.current = {x:player.current.x+24,y:player.current.y-24,phase:0}
+        twinRef.current.x = lerp(twinRef.current.x, player.current.x+24, 0.15)
+        twinRef.current.y = lerp(twinRef.current.y, player.current.y-24, 0.15)
+        if (frame.current-lastFire.current>8 && (fire || touchFiring.current)) {
+          bulletsRef.current.push(bullet(twinRef.current.x, twinRef.current.y, 8, 4, Math.cos(aimAngle.current)*8, Math.sin(aimAngle.current)*8, 'blaster'))
+        }
+      } else twinRef.current = null
+
+      /* pick-ups */
       for(const pu of powerupsRef.current){
         const box={x:pu.x,y:pu.y,w:28,h:28}
+        const pb = {x:player.current.x,y:player.current.y,w:player.current.radius*2,h:player.current.radius*2} as any
         if(aabb(pb, box as any)){
           (pu as any).x=-9999; boostsCollected.current++
           if(pu.kind==='shield') player.current.shieldMs=3600
-          if(pu.kind==='speed'){ player.current.maxSpeed=Math.min(11.5,player.current.maxSpeed+0.6); rapidMs.current=5000 }
+          if(pu.kind==='speed'){ player.current.maxSpeed=Math.min(12.5,player.current.maxSpeed+0.8); rapidMs.current=5200 }
           if(pu.kind==='heal'){ player.current.hp=Math.min(MAX_LIVES,player.current.hp+1); recalcTargetRadius() }
-          if(pu.kind==='weapon'&&pu.payload){ const target=WEAPON_TIER.indexOf(asWeaponId(pu.payload)); if(target>weaponLevel.current) weaponLevel.current=target; rapidMs.current=5000 }
+          if(pu.kind==='weapon'&&pu.payload){ const target=WEAPON_TIER.indexOf(asWeaponId(pu.payload)); if(target>weaponLevel.current) weaponLevel.current=target; rapidMs.current=5200 }
           if(pu.kind==='drone') drones.current.push({phase:Math.random()*Math.PI*2})
-          if(pu.kind==='haste') hasteMs.current=4000
-          particlesRef.current.push(...explode(player.current.x,player.current.y, pu.kind==='haste'?'#f87171':'#fde047',16))
+          if(pu.kind==='haste') hasteMs.current=4200
+          if(pu.kind==='barrier') barrierMs.current = 6500
+          if(pu.kind==='twin')    twinMs.current = 8000
+          if(pu.kind==='familiars') helpersMs.current = 9000
+          particlesRef.current.push(...explode(player.current.x,player.current.y, pu.kind==='haste'?'#f87171':'#fde047',18))
           if(!mute) (pu.kind==='haste')? synth.hit(): synth.power()
         }
       }
 
-      // XP orbs
+      /* XP orbs */
       for(const o of xpOrbsRef.current){
         const dx=player.current.x-o.x, dy=player.current.y-o.y
         const d=Math.max(0.001, Math.hypot(dx,dy))
@@ -558,7 +616,7 @@ export default function Game(props: {
       }
       xpOrbsRef.current = xpOrbsRef.current.filter(o=>o.life>0)
 
-      // level ups
+      /* level ups */
       let didLevelUp = false
       while(xp.current >= xpToNext.current){
         xp.current -= xpToNext.current
@@ -574,7 +632,7 @@ export default function Game(props: {
         if(!mute) synth.power()
       }
 
-      // particle life
+      /* particles + bg */
       for (const sp of particlesRef.current) {
         const d = ensureData(sp)
         ;(sp as any).x += num((sp as any).vx, 0)
@@ -582,14 +640,10 @@ export default function Game(props: {
         d.life = num(d.life, 0) - 1
       }
       particlesRef.current = particlesRef.current.filter(sp => num(sp.data?.life, 0) > 0)
+      for(const bb of bubblesRef.current){ bb.y-=bb.v; if(bb.y<-10){ bb.x=rnd(0,W.current); bb.y=H.current+rnd(10,80); bb.r=rnd(2,6); bb.v=rnd(0.4,1.0) } }
 
-      // bubbles bg
-      for(const bb of bubblesRef.current){ bb.y-=bb.v; if(bb.y<-10){ bb.x=rnd(0,W.current); bb.y=H.current+rnd(10,80); bb.r=rnd(2,6); bb.v=rnd(0.4,1.2) } }
-
-      // report progress to App (for bars)
-      if (props.onProgress) {
-        props.onProgress(xp.current, xpToNext.current, playerLevel.current, didLevelUp)
-      }
+      // report progress
+      props.onProgress?.(xp.current, xpToNext.current, playerLevel.current, didLevelUp)
 
       draw(ctx)
     }
@@ -599,7 +653,6 @@ export default function Game(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[paused,mute,stage,ax,ay,fire,gameOver])
 
-  /* ======== Picks & colors ======== */
   const pickWeaponWeighted=(st:number):WeaponId=>{
     const bag:WeaponId[]=['blaster','blaster','spread','piercer']
     if(st>=2) bag.push('spread','piercer'); if(st>=3) bag.push('laser')
@@ -614,24 +667,25 @@ export default function Game(props: {
     k==='jelly'?'#67e8f9': k==='squid'?'#f472b6': k==='manta'?'#93c5fd':
     k==='nautilus'?'#fbbf24': k==='puffer'?'#34d399':'#fca5a5'
 
-  /* ======== Reset ======== */
   const softReset=()=>{
     setGameOver(false)
     player.current={x:140,y:360,vx:0,vy:0,maxSpeed:7.5,radius:BASE_R,hp:6,shieldMs:0,weapon:'blaster'}
     weaponLevel.current=0; rapidMs.current=0; hasteMs.current=0; drones.current=[]
     particlesRef.current=[]; enemiesRef.current=[]; powerupsRef.current=[]; bossRef.current=null
-    levelCfg.current=makeLevel(stage); spawns.current=0; hitFlash.current=0; dmgBounce.current=0; shake.current=0; killStreak.current=0
+    lvl.current=makeLevel(stage); spawns.current=0; hitFlash.current=0; dmgBounce.current=0; shake.current=0; killStreak.current=0
     setScore(0); enemiesKilled.current=0; boostsCollected.current=0
     xp.current=0; xpToNext.current=40; playerLevel.current=1; avatarHue.current=38
     killsSincePower.current=0; killsNeeded.current=10; xpOrbsRef.current=[]
+    barrierMs.current=0; twinMs.current=0; helpersMs.current=0
   }
 
-  /* ======== Draw ======== */
   function draw(ctx:CanvasRenderingContext2D){
     const w=W.current,h=H.current
     const g=ctx.createLinearGradient(0,0,0,h)
     g.addColorStop(0,'#0ea5e9'); g.addColorStop(1,'#312e81')
     ctx.fillStyle=g; ctx.fillRect(0,0,w,h)
+
+    // soft light bands
     ctx.globalAlpha=0.16
     for(let i=0;i<5;i++){
       const y=(Math.sin((frame.current*0.008)+(i*1.3))*0.5+0.5)*h
@@ -645,7 +699,7 @@ export default function Game(props: {
     if(hitFlash.current>0){ ctx.fillStyle=`rgba(239,68,68,${0.14+0.08*Math.sin(frame.current*0.5)})`; ctx.fillRect(0,0,w,h) }
     if(hasteMs.current>0){ ctx.fillStyle='rgba(244,63,94,0.06)'; ctx.fillRect(0,0,w,h) }
 
-    // bg bubbles
+    // bubbles bg
     ctx.fillStyle='rgba(255,255,255,.3)'
     for(const b of bubblesRef.current){ ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill() }
 
@@ -664,35 +718,29 @@ export default function Game(props: {
       ctx.beginPath(); ctx.arc(o.x,o.y,4,0,Math.PI*2); ctx.fill()
     }
 
-    // powerups
+    // powerups draw (mythics distinct)
     for (const pu of powerupsRef.current) {
       ctx.save(); ctx.translate(pu.x, pu.y)
+      const mythic = (pu.kind==='barrier'||pu.kind==='twin'||pu.kind==='familiars')
       const isBad = pu.kind === 'haste'
-      if (!isBad) {
+      if (mythic) {
+        ctx.strokeStyle='rgba(250,204,21,.95)'; ctx.lineWidth=3
+        ctx.beginPath(); ctx.arc(0,0,14+Math.sin(frame.current*0.16+pu.id)*2,0,Math.PI*2); ctx.stroke()
+        ctx.fillStyle='#fde047'; ctx.beginPath(); ctx.arc(0,0,10,0,Math.PI*2); ctx.fill()
+      } else if (!isBad) {
         const pearl = ctx.createRadialGradient(0, 0, 2, 0, 0, 12)
         pearl.addColorStop(0, '#ffffff'); pearl.addColorStop(1, '#facc15')
         ctx.fillStyle = pearl; ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.fill()
-        ctx.strokeStyle = 'rgba(250,204,21,.85)'
-        ctx.lineWidth = 2 + Math.sin(frame.current * 0.2 + pu.id) * 1.2
-        const r = 18 + Math.sin(frame.current * 0.16 + pu.id) * 3
-        ctx.beginPath()
-        for (let i = 0; i < 24; i++) {
-          const a = i * (Math.PI * 2 / 24) + frame.current * 0.04
-          ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r)
-        }
-        ctx.closePath(); ctx.stroke()
-        goldTentacle(ctx, 0, 14, 22, 10, 5)
       } else {
         ctx.fillStyle = '#ef4444'
         ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.fill()
         ctx.strokeStyle = 'rgba(239,68,68,.9)'; ctx.lineWidth = 3
         ctx.beginPath(); ctx.arc(0, 0, 20 + Math.sin(frame.current * 0.16 + pu.id) * 3, 0, Math.PI * 2); ctx.stroke()
-        fireTentacle(ctx, 0, 14, 22, 10, 6)
       }
       ctx.restore()
     }
 
-    // enemies render
+    // enemies/bullets
     for(const e of enemiesRef.current){
       ctx.save(); ctx.translate((e as any).x,(e as any).y)
       const k=asEnemyKind(text((e as any).data?.kind,'jelly'))
@@ -700,7 +748,7 @@ export default function Game(props: {
         const kind = text((e as any).data?.boss,'')
         if (kind === 'spear') {
           ctx.fillStyle='#a78bfa'
-          roundedRect(ctx,-(e as any).w/2,-(e as any).h/2,(e as any).w,(e as any).h,3); ctx.fill()
+          roundCapsule(ctx,-(e as any).w/2,-(e as any).h/2,(e as any).w,(e as any).h,3); ctx.fill()
           ctx.fillStyle='#fff'; ctx.fillRect(-(e as any).w/2, -1.5, (e as any).w*0.6, 3)
         } else if (kind === 'ring') {
           ctx.strokeStyle='rgba(250,204,21,.9)'; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(0,0,8,0,Math.PI*2); ctx.stroke()
@@ -710,31 +758,22 @@ export default function Game(props: {
           ctx.fillStyle=grd; ctx.beginPath(); ctx.arc(0,0,12,0,Math.PI*2); ctx.fill()
         } else {
           ctx.fillStyle = (e as any).data?.tint || 'rgba(251,113,133,.95)'
-          roundedRect(ctx, -(e as any).w/2, -(e as any).h/2, (e as any).w, (e as any).h, 3); ctx.fill()
+          roundCapsule(ctx, -(e as any).w/2, -(e as any).h/2, (e as any).w, (e as any).h, 3); ctx.fill()
         }
       } else {
-        ctx.fillStyle = colorForEnemy(k); ctx.strokeStyle='rgba(255,255,255,.25)'; ctx.lineWidth=2
+        ctx.fillStyle = colorForEnemy(k); ctx.lineWidth=2
         if (k==='jelly') {
-          roundedBlob(ctx,-(e as any).w*0.35,-(e as any).h*0.2,(e as any).w*0.7,(e as any).h*0.7,18); ctx.fill()
-          ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(-6,-4,3,0,Math.PI*2); ctx.arc(6,-4,3,0,Math.PI*2); ctx.fill()
-          for (let i=-2;i<=2;i++){
-            oceanTentacle(ctx, i*5, (e as any).h*0.28, 18, 10, 6 + Math.sin((frame.current + i*8)*0.1)*2)
-          }
+          roundCapsule(ctx,-(e as any).w*0.35,-(e as any).h*0.2,(e as any).w*0.7,(e as any).h*0.7,18); ctx.fill()
         } else if (k==='squid') {
-          squidShape(ctx,(e as any).w,(e as any).h); ctx.fill(); ctx.stroke()
-          ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(0,-10,3,0,Math.PI*2); ctx.fill()
+          ctx.beginPath(); ctx.moveTo(-16,-12); ctx.quadraticCurveTo(0,-28,16,-12); ctx.quadraticCurveTo(20,8,0,22); ctx.quadraticCurveTo(-20,8,-16,-12); ctx.closePath(); ctx.fill()
         } else if (k==='manta') {
-          mantaShape(ctx,(e as any).w,(e as any).h); ctx.fill()
-          ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(-10,-6,3,0,Math.PI*2); ctx.arc(10,-6,3,0,Math.PI*2); ctx.fill()
+          ctx.beginPath(); ctx.moveTo(-34,0); ctx.quadraticCurveTo(0,-24,34,0); ctx.quadraticCurveTo(0,14,-34,0); ctx.closePath(); ctx.fill()
         } else if (k==='nautilus') {
-          nautilusShape(ctx,(e as any).w); ctx.fill(); ctx.stroke()
-          ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(6,-4,3,0,Math.PI*2); ctx.fill()
+          ctx.beginPath(); ctx.arc(0,0,18,0,Math.PI*2); for(let i=0;i<8;i++){ ctx.lineTo(Math.cos(i*.8)*i*2,Math.sin(i*.8)*i*2) } ctx.fill()
         } else if (k==='puffer') {
-          const sc=num((e as any).data?.scale,1); pufferShape(ctx,(e as any).w*sc,(e as any).h*sc); ctx.fill(); ctx.stroke()
-          ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(-5,-2,2.5,0,Math.PI*2); ctx.arc(5,-2,2.5,0,Math.PI*2); ctx.fill()
+          ctx.beginPath(); ctx.arc(0,0,18,0,Math.PI*2); for(let i=0;i<10;i++){ const a=i*(Math.PI*2/10); ctx.moveTo(Math.cos(a)*12,Math.sin(a)*12); ctx.lineTo(Math.cos(a)*16,Math.sin(a)*16) } ctx.fill()
         } else if (k==='crab') {
-          crabShape(ctx,(e as any).w,(e as any).h); ctx.fill()
-          ctx.fillStyle='#0b1220'; ctx.beginPath(); ctx.arc(-8,-4,2.5,0,Math.PI*2); ctx.arc(8,-4,2.5,0,Math.PI*2); ctx.fill()
+          ctx.beginPath(); ctx.ellipse(0,0,22,14,0,0,Math.PI*2); ctx.fill()
         }
       }
       ctx.restore()
@@ -742,43 +781,41 @@ export default function Game(props: {
 
     // player bullets
     for (const b of bulletsRef.current) {
-      const k = asWeaponId(text(b.data?.kind, 'blaster'))
+      const k = text(b.data?.kind, 'blaster') as WeaponId
       const x = (b as any).x, y = (b as any).y, w = (b as any).w, h = (b as any).h
-      const vx = num((b as any).vx, 8), dy = num(b.data?.dy, 0)
+      const vx = num((b as any).vx, 8), vy = num((b as any).vy, 0)
       if (k === 'rail') {
-        const grd = ctx.createLinearGradient(x - w/2, y, x + w/2, y)
+        const ang = Math.atan2(vy, vx)
+        ctx.save(); ctx.translate(x,y); ctx.rotate(ang)
+        const grd = ctx.createLinearGradient(-w/2, 0, w/2, 0)
         grd.addColorStop(0, 'rgba(167,139,250,.2)'); grd.addColorStop(1, 'rgba(229,231,235,.95)')
-        ctx.fillStyle = grd; ctx.fillRect(Math.floor(x - w/2), Math.floor(y - h/2), w, h)
+        ctx.fillStyle = grd; ctx.fillRect(-w/2, -h/2, w, h); ctx.restore()
       } else {
-        drawSeaDragonBullet(ctx, x, y, Math.max(10, w), Math.max(6, h), vx, dy)
+        drawSeaDragonBullet(ctx, x, y, Math.max(10, w), Math.max(6, h), vx, vy)
       }
     }
 
-    // player avatar
+    // player + mythic visuals
     const p=player.current
     const glow=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,36)
     glow.addColorStop(0,`hsla(${avatarHue.current},95%,75%,.95)`); glow.addColorStop(1,'rgba(254,240,138,0)')
     ctx.fillStyle=glow; ctx.beginPath(); ctx.arc(p.x,p.y,36,0,Math.PI*2); ctx.fill()
     ctx.fillStyle= hitFlash.current>0 ? '#fecaca' : `hsl(${avatarHue.current},70%,85%)`
     const sx=p.radius*(1+dmgBounce.current*0.18), sy=p.radius*(1-dmgBounce.current*0.12)
-    roundedRect(ctx,p.x-sx*0.45,p.y-sy*0.3,sx*0.9,sy*1.2,8); ctx.fill()
+    roundCapsule(ctx,p.x-sx*0.45,p.y-sy*0.3,sx*0.9,sy*1.2,8); ctx.fill()
     ctx.beginPath(); ctx.arc(p.x,p.y-sy*0.8,sx*0.45,0,Math.PI*2); ctx.fill()
     if(player.current.shieldMs>0){ ctx.strokeStyle='rgba(34,211,238,.9)'; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(p.x,p.y,p.radius+10+Math.sin(frame.current*0.2)*2,0,Math.PI*2); ctx.stroke() }
+    if(barrierMs.current>0){ ctx.strokeStyle='rgba(253,224,71,.85)'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(p.x,p.y,p.radius+40,0,Math.PI*2); ctx.stroke() }
+    if(twinRef.current){ ctx.fillStyle='rgba(255,255,255,.45)'; roundCapsule(ctx,twinRef.current.x-10,twinRef.current.y-8,20,30,8); ctx.fill() }
+
+    if(bossRef.current){ drawSeaDragon(ctx, bossRef.current.x, bossRef.current.y, frame.current*0.04) }
 
     if(shake.current>0){ ctx.restore() }
 
     // HUD (bilingual)
     const L = props.lang === 'he'
-      ? {
-          score: 'ניקוד', stage: 'שלב', boss: 'בוס', weapon: 'נשק',
-          fell: 'נפלת במעמקים…', again: 'לחצו רווח / אנטר כדי לשחק שוב',
-          defeated: 'אויבים שהובסו', boosts: 'בוסטרים שנאספו',
-        }
-      : {
-          score: 'Score', stage: 'Stage', boss: 'Boss', weapon: 'Weapon',
-          fell: 'You fell into the depths…', again: 'Press Space / Enter to play again',
-          defeated: 'Enemies defeated', boosts: 'Boosters collected',
-        }
+      ? { score:'ניקוד', stage:'שלב', boss:'בוס', weapon:'נשק', fell:'נפלת במעמקים…', again:'לחצו רווח / אנטר כדי לשחק שוב', defeated:'אויבים שהובסו', boosts:'בוסטרים שנאספו' }
+      : { score:'Score', stage:'Stage', boss:'Boss', weapon:'Weapon', fell:'You fell into the depths…', again:'Press Space / Enter to play again', defeated:'Enemies defeated', boosts:'Boosters collected' }
 
     ctx.fillStyle='#fff'; ctx.font='800 18px system-ui'; ctx.textAlign='right'
     ctx.fillText(`${L.score} ${score}`, w-12, 26)
@@ -798,6 +835,16 @@ export default function Game(props: {
         [`${L.score}: ${score}`, `${L.defeated}: ${enemiesKilled.current}`, `${L.boosts}: ${boostsCollected.current}`],
         L.again)
     }
+
+    // draw joystick feedback on canvas (subtle)
+    if (moveOrigin.current) {
+      ctx.strokeStyle='rgba(255,255,255,.25)'; ctx.lineWidth=2
+      ctx.beginPath(); ctx.arc(moveOrigin.current.x, moveOrigin.current.y, 70, 0, Math.PI*2); ctx.stroke()
+    }
+    if (aimOrigin.current) {
+      ctx.strokeStyle='rgba(250,204,21,.25)'; ctx.lineWidth=2
+      ctx.beginPath(); ctx.arc(aimOrigin.current.x, aimOrigin.current.y, 70, 0, Math.PI*2); ctx.stroke()
+    }
   }
 
   function drawOverlay(ctx:CanvasRenderingContext2D,w:number,h:number,title:string,lines:string[],cta:string){
@@ -812,14 +859,10 @@ export default function Game(props: {
 
   return (
     <div className="game" dir={props.lang==='he'?'rtl':'ltr'}>
-      {/* visual joystick halos (input handled on the canvas) */}
+      {/* visual joystick halos (visible on web and phone) */}
       <div className="joy left" />
       <div className="joy right" />
-      <canvas
-        className="canvas"
-        ref={canvasRef}
-        onPointerDown={()=>{ if (gameOver) softReset() }}
-      />
+      <canvas className="canvas" ref={canvasRef} onPointerDown={()=>{ if (gameOver) softReset() }} />
     </div>
   )
 }
