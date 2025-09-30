@@ -341,15 +341,7 @@ export default function Game(props: {
 
     const recalcTargetRadius=()=>{ const t=Math.max(1,player.current.hp)/MAX_LIVES; targetRadius.current=BASE_R*(0.32+0.68*t) }
 
-    const damagePlayer=(dmg=1)=>{
-      if(player.current.shieldMs>0){ if(!mute) synth.hit(); hitFlash.current=8; return }
-      player.current.hp-=dmg; recalcTargetRadius(); dmgBounce.current=1; hitFlash.current=16; shake.current=22
-      if(!mute) synth.hit(); killStreak.current=0
-      if(player.current.hp<=0){
-        for(let i=0;i<120;i++) particlesRef.current.push(spark(player.current.x,player.current.y,i%2?'#22d3ee':'#a78bfa',24+rnd(0,20),2+rnd(0,3)))
-        if(!mute) synth.nova(); setGameOver(true)
-      }
-    }
+
 
     const loop=()=>{
       rafRef.current=requestAnimationFrame(loop)
