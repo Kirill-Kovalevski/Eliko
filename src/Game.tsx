@@ -1,5 +1,5 @@
 /* FULL Game.tsx — smooth arrows, twin-stick mobile, bilingual HUD, XP/Level progress */
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Entity, PlayerState, WeaponId, PowerUpKind } from './types'
 import { clamp, lerp, rnd, id, aabb } from './utils'
 import { useInput } from './useInput'
