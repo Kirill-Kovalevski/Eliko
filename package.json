@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview --strictPort",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "predeploy": "npm run build && cp dist/index.html dist/404.html",
+    "deploy": "gh-pages -d dist -b gh-pages"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -18,6 +20,7 @@
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^4.3.1",
     "typescript": "^5.5.4",
-    "vite": "^5.4.2"
+    "vite": "^5.4.2",
+    "gh-pages": "^6.1.1"
   }
 }
