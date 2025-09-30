@@ -554,6 +554,16 @@ export default function Game(props: {
           e.x += (dx/d)*8; e.y += (dy/d)*8
         }
       }
+      // enemy bullets CAN damage the player
+for (const e of enemiesRef.current) {
+  if (!flag(e.data?.bullet)) continue
+  const b = e as any
+  if (aabb(pb, b)) {
+    damagePlayer(1)     // <- now the helper is used (fixes TS unused)
+    b.x = -9999         // despawn the bullet
+  }
+}
+
       if(bossRef.current && aabb(pb,bossRef.current)){
         // just slide off the boss body
         const dx = bossRef.current.x - player.current.x, dy = bossRef.current.y - player.current.y
@@ -760,7 +770,6 @@ export default function Game(props: {
       ctx.save(); ctx.translate((e as any).x,(e as any).y)
       const k=asEnemyKind(text((e as any).data?.kind,'jelly'))
       if (flag((e as any).data?.bullet)) {
-        const kind = text((e as any).data?.boss,'')
         ctx.fillStyle = (e as any).data?.tint || 'rgba(251,113,133,.95)'
         roundCapsule(ctx, -(e as any).w/2, -(e as any).h/2, (e as any).w, (e as any).h, 3); ctx.fill()
       } else {
