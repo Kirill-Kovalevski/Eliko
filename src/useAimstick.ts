@@ -1,14 +1,13 @@
-// src/useAimstick.ts
 import { useEffect, useRef } from 'react'
 import type { RefObject } from 'react'
 
 type Pt = { x: number; y: number }
 
 /**
- * Right-side thumbstick: aim + fire.
- * Returns refs so the game loop reads live values without re-renders.
- * - axRef / ayRef in [-1..1] (0 if idle)
- * - firingRef is true while the right finger is down
+ * Right-half dynamic joystick (aim + fire).
+ * - Touch/pen only
+ * - Fires ONLY while the right finger is down and moved beyond threshold
+ * - Returns ax/ay (direction) and firingRef (boolean)
  */
 export function useAimstick(
   canvasRef: RefObject<HTMLCanvasElement | null>,
@@ -30,8 +29,12 @@ export function useAimstick(
       return
     }
 
-    const R = 120      // radius
-    const DZ = 8       // deadzone
+    const R = 120
+    const DZ = 10
+    const FIRE_TH = 0.10   // magnitude threshold to consider "actively aiming/firing"
+    const SNAP = 0.05
+
+    c.style.touchAction = 'none'
 
     const local = (e: PointerEvent) => {
       const r = c.getBoundingClientRect()
@@ -39,34 +42,36 @@ export function useAimstick(
     }
 
     const onDown = (e: PointerEvent) => {
-      // touch/pen only, right half only
       if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return
       if (idRef.current !== null) return
       const p = local(e)
-      if (p.x <= c.clientWidth * 0.58) return
+      // Right half only
+      if (p.x < c.clientWidth * 0.5) return
       idRef.current = e.pointerId
       try { c.setPointerCapture(e.pointerId) } catch {}
       originRef.current = p
-      axRef.current = 0
-      ayRef.current = 0
-      firingRef.current = true
+      axRef.current = 0; ayRef.current = 0
+      firingRef.current = false
     }
 
     const onMove = (e: PointerEvent) => {
       if (idRef.current === null || e.pointerId !== idRef.current) return
       if (e.pointerType === 'touch') e.preventDefault()
       const p = local(e)
-      let dx = p.x - originRef.current.x
-      let dy = p.y - originRef.current.y
+      const dx = p.x - originRef.current.x
+      const dy = p.y - originRef.current.y
       const len = Math.hypot(dx, dy)
 
-      // deadzone + simple linear magnitude
       let mag = 0
       if (len > DZ) mag = Math.min(1, (len - DZ) / (R - DZ))
-      const nx = len > 0 ? (dx / len) * mag : 0
-      const ny = len > 0 ? (dy / len) * mag : 0
-      axRef.current = nx
-      ayRef.current = ny
+      const curved = 1 - Math.pow(1 - mag, 3)
+      const nx = len > 0 ? (dx / len) * curved : 0
+      const ny = len > 0 ? (dy / len) * curved : 0
+
+      const m = Math.hypot(nx, ny)
+      axRef.current = m < SNAP ? 0 : nx
+      ayRef.current = m < SNAP ? 0 : ny
+      firingRef.current = m > FIRE_TH
     }
 
     const onEnd = (e: PointerEvent) => {
