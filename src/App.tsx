@@ -1,4 +1,3 @@
-// src/App.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import Game from "./Game";
 import "./index.css";
@@ -20,15 +19,24 @@ const App: React.FC = () => {
     localStorage.setItem("eliko.lang", lang);
   }, [lang]);
 
-  // Progress coming from Game
   const [xp, setXp] = useState(0);
   const [level, setLevel] = useState(1);
   const [xpNeeded, setXpNeeded] = useState(40);
   const xpPercent = Math.max(0, Math.min(100, (xp / xpNeeded) * 100));
 
   const t = useMemo(() => {
-    const he = { title: "אליקו", level: (n: number) => `רמה ${n}`, he: "עברית", en: "English" };
-    const en = { title: "ELIKO", level: (n: number) => `Level ${n}`, he: "עברית", en: "English" };
+    const he = {
+      title: "אליקו",
+      level: (n: number) => `רמה ${n}`,
+      he: "עברית",
+      en: "English",
+    };
+    const en = {
+      title: "ELIKO",
+      level: (n: number) => `Level ${n}`,
+      he: "עברית",
+      en: "English",
+    };
     return lang === "he" ? he : en;
   }, [lang]);
 
