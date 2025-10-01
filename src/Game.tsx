@@ -268,6 +268,15 @@ export default function Game(
 
   // auto-aim angle
   const aimAngle = useRef(0);
+// === Touch controller (phone): two independent pointers ===
+// Left thumb controls movement target (follow-the-thumb).
+const leftIdRef  = useRef<number | null>(null);
+const moveTargetRef = useRef<{active:boolean; x:number; y:number}>({active:false, x:0, y:0});
+
+// Right thumb controls aim + fire.
+const rightIdRef = useRef<number | null>(null);
+const aimPointRef = useRef<{active:boolean; x:number; y:number}>({active:false, x:0, y:0});
+const fireTouchRef = useRef(false);
 
   /* ===== sizing ===== */
   useEffect(() => {
@@ -287,6 +296,68 @@ export default function Game(
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+useEffect(() => {
+  if (MODE.current !== "touch") return;
+  const c = canvasRef.current!;
+  c.style.touchAction = "none"; // precise sticks, no bounce
+
+  const local = (e: PointerEvent) => {
+    const r = c.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+
+  const onDown = (e: PointerEvent) => {
+    if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
+    const p = local(e);
+    const leftSide = p.x <= c.clientWidth * 0.5;
+
+    if (leftSide) {
+      if (leftIdRef.current == null) {
+        leftIdRef.current = e.pointerId;
+        moveTargetRef.current = {active:true, x:p.x, y:p.y};
+      }
+    } else {
+      if (rightIdRef.current == null) {
+        rightIdRef.current = e.pointerId;
+        aimPointRef.current = {active:true, x:p.x, y:p.y};
+        fireTouchRef.current = true; // holding right thumb starts firing
+      }
+    }
+  };
+
+  const onMove = (e: PointerEvent) => {
+    const id = e.pointerId;
+    if (id !== leftIdRef.current && id !== rightIdRef.current) return;
+    const p = local(e);
+    if (id === leftIdRef.current) {
+      moveTargetRef.current = {active:true, x:p.x, y:p.y};
+    } else if (id === rightIdRef.current) {
+      aimPointRef.current = {active:true, x:p.x, y:p.y};
+    }
+  };
+
+  const clearRight = () => { rightIdRef.current = null; aimPointRef.current.active = false; fireTouchRef.current = false; };
+  const clearLeft  = () => { leftIdRef.current  = null; moveTargetRef.current.active  = false; };
+
+  const onUpOrCancel = (e: PointerEvent) => {
+    if (e.pointerId === leftIdRef.current)  clearLeft();
+    if (e.pointerId === rightIdRef.current) clearRight();
+  };
+
+  c.addEventListener("pointerdown", onDown, { passive:true });
+  c.addEventListener("pointermove", onMove, { passive:true });
+  c.addEventListener("pointerup", onUpOrCancel, { passive:true });
+  c.addEventListener("pointercancel", onUpOrCancel, { passive:true });
+  c.addEventListener("pointerleave", onUpOrCancel, { passive:true });
+
+  return () => {
+    c.removeEventListener("pointerdown", onDown as any);
+    c.removeEventListener("pointermove", onMove as any);
+    c.removeEventListener("pointerup", onUpOrCancel as any);
+    c.removeEventListener("pointercancel", onUpOrCancel as any);
+    c.removeEventListener("pointerleave", onUpOrCancel as any);
+  };
+}, []);
 
   /* ===== keyboard scroll prevention (desktop) + toggles ===== */
   useEffect(() => {
@@ -350,29 +421,34 @@ export default function Game(
       if (dmgBounce.current > 0) dmgBounce.current = Math.max(0, dmgBounce.current - 0.08 * dt);
       if (xpGainPulse.current > 0) xpGainPulse.current -= 0.05 * dt;
 
-      /* -------- MOVEMENT (independent from firing) -------- */
-      let axEff = 0, ayEff = 0;
-      if (MODE.current === "touch") {
-        // left stick controls movement, smoothed
-        axEff = left.ax; ayEff = left.ay;
-      } else {
-        axEff = kbAx; ayEff = kbAy; // keyboard (from useInput)
-      }
+   /* === Movement input ===
+   - phone: left thumb sets a target position, avatar moves smoothly toward it
+   - desktop: arrows control freely
+*/
+let axEff = 0, ayEff = 0;
 
-      const targetVx = axEff * player.current.maxSpeed;
-      const targetVy = ayEff * player.current.maxSpeed;
-      const base = MODE.current === "touch" ? 0.16 : 0.22; // smoothing
-      const lerpFactor = 1 - Math.pow(1 - base, dt);
-      player.current.vx += (targetVx - player.current.vx) * lerpFactor;
-      player.current.vy += (targetVy - player.current.vy) * lerpFactor;
+if (MODE.current === "touch") {
+  if (moveTargetRef.current.active) {
+    const dx = moveTargetRef.current.x - player.current.x;
+    const dy = moveTargetRef.current.y - player.current.y;
+    const d  = Math.max(0.001, Math.hypot(dx, dy));
+    axEff = dx / d;
+    ayEff = dy / d;
+  }
+} else {
+  // Desktop
+  axEff = kbAx;
+  ayEff = kbAy;
+}
 
-      player.current.x = clamp(player.current.x + player.current.vx, PADDING + player.current.radius, W.current - PADDING - player.current.radius);
-      player.current.y = clamp(player.current.y + player.current.vy, PADDING + player.current.radius, H.current - PADDING - player.current.radius);
+// Apply smoothing into velocity
+const targetVx = axEff * player.current.maxSpeed;
+const targetVy = ayEff * player.current.maxSpeed;
+const base = MODE.current === "touch" ? 0.18 : 0.22; // slightly smoother on touch
+const lerpFactor = 1 - Math.pow(1 - base, dt);
+player.current.vx += (targetVx - player.current.vx) * lerpFactor;
+player.current.vy += (targetVy - player.current.vy) * lerpFactor;
 
-      player.current.radius = lerp(player.current.radius, targetRadius.current, 0.20 * dt) * (1 + dmgBounce.current * 0.2);
-      player.current.radius = Math.max(12, player.current.radius);
-      if (player.current.shieldMs > 0) player.current.shieldMs -= 16 * dt;
-      if (shake.current > 0) shake.current = Math.max(0, shake.current - 0.8 * dt);
 
       /* -------- AIM (right stick on touch, auto-aim fallback on desktop) -------- */
       let aimOverridden = false;
