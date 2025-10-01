@@ -45,7 +45,6 @@ const App: React.FC = () => {
       </header>
 
       <main className="stage">
-        {/* Only the imported Game component is used here */}
         <Game lang={lang} onProgress={handleProgress} />
       </main>
 
