@@ -7,12 +7,14 @@ import { useThumbstick } from './useThumbstick'
 import { synth } from './audio'
 import { makeLevel, STAGE_LENGTH } from './levels'
 
+
 /* ===== tiny utils ===== */
 const num = (v: any, d = 0) => { const n = Number(v); return Number.isFinite(n) ? n : d }
 const flag = (v: any) => v === true
 const text = (v: any, d = '') => (typeof v === 'string' ? v : d)
 const ensureData = <T extends { data?: Record<string, any> }>(o: T) => (o.data ??= {} as Record<string, any>)
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+
 
 /* ===== input mode detection ===== */
 function detectMode(): 'touch'|'desktop' {
@@ -46,6 +48,7 @@ const asEnemyKind = (x: unknown): EnemyKind => {
   const bag = ['jelly','squid','manta','nautilus','puffer','crab','siren']
   return (bag as readonly string[]).includes(String(x)) ? (x as EnemyKind) : 'jelly'
 }
+
 
 /* ===== entities ===== */
 function bullet(x:number,y:number,w:number,h:number,vx:number,vy:number,kind:WeaponId|string,data:Record<string,unknown>={}):Entity{
@@ -92,45 +95,6 @@ const WEAPONS: Record<WeaponId, { gap:number; sfx:()=>void; onFire:FireFn }> = {
   nova:   { gap:34, sfx:()=>synth.nova(),   onFire:(p,ang)=>novaFan(p,ang)},
 }
 
-/* ===== funny creature bits ===== */
-function drawSeaDragon(ctx: CanvasRenderingContext2D, x:number, y:number, t:number){
-  ctx.save(); ctx.translate(x, y)
-  ctx.shadowColor = 'rgba(56,189,248,.8)'; ctx.shadowBlur = 24
-  const path = new Path2D()
-  path.moveTo(-100, 0)
-  for(let i=0;i<=12;i++){
-    const px = -100 + i*18
-    const py = Math.sin((i*0.6)+t)*18*(1 - i/14)
-    if(i===0) path.moveTo(px,py); else path.lineTo(px,py)
-  }
-  ctx.strokeStyle = 'rgba(59,130,246,.9)'; ctx.lineWidth = 16; ctx.lineCap='round'
-  ctx.stroke(path)
-  ctx.shadowBlur = 0
-  ctx.fillStyle = '#e0f2fe'
-  roundCapsule(ctx, 10, -18, 44, 36, 12); ctx.fill()
-  ctx.fillStyle = '#0b1220'; ctx.beginPath(); ctx.arc(46, -6, 3, 0, Math.PI*2); ctx.arc(46, 6, 3, 0, Math.PI*2); ctx.fill()
-  ctx.restore()
-}
-function roundCapsule(ctx:CanvasRenderingContext2D, x:number, y:number, w:number, h:number, r:number){
-  const rr = Math.min(r, h/2); ctx.beginPath(); ctx.moveTo(x+rr, y); ctx.lineTo(x+w-rr, y)
-  ctx.arc(x+w-rr, y+rr, rr, -Math.PI/2, Math.PI/2); ctx.lineTo(x+rr, y+h); ctx.arc(x+rr, y+rr, rr, Math.PI/2, -Math.PI/2); ctx.closePath()
-}
-function drawSeaDragonBullet(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, vx: number, vy: number){
-  const ang = Math.atan2(vy || 0, Math.max(0.01, vx || 8))
-  ctx.save(); ctx.translate(x, y); ctx.rotate(ang)
-  const tail = ctx.createLinearGradient(-w*1.6, 0, w*0.5, 0)
-  tail.addColorStop(0, 'hsla(190, 90%, 65%, 0)'); tail.addColorStop(1, 'hsla(190, 95%, 72%, .55)')
-  ctx.fillStyle = tail; ctx.beginPath(); ctx.moveTo(-w*1.6, -h*0.35)
-  ctx.quadraticCurveTo(-w*0.7, 0, -w*1.6,  h*0.35); ctx.lineTo( w*0.45,  h*0.18); ctx.lineTo( w*0.45, -h*0.18); ctx.closePath(); ctx.fill()
-  ctx.shadowBlur = 14; ctx.shadowColor = 'hsl(195, 100%, 80%)'
-  const body = ctx.createLinearGradient(-w*0.4, 0, w*0.7, 0)
-  body.addColorStop(0, 'hsl(190, 95%, 72%)'); body.addColorStop(1, 'hsl(210, 90%, 88%)')
-  ctx.fillStyle = body; roundCapsule(ctx, -w*0.4, -h*0.5, w*1.1, h, Math.min(h*0.5, 8)); ctx.fill()
-  ctx.shadowBlur = 0; ctx.fillStyle = 'hsl(190, 95%, 70%)'
-  ctx.beginPath(); ctx.moveTo(-w*0.15, 0); ctx.lineTo(-w*0.45,  h*0.42); ctx.lineTo( w*0.05,   h*0.18); ctx.closePath(); ctx.fill()
-  ctx.fillStyle = '#0b1220'; ctx.beginPath(); ctx.arc(w*0.35, -h*0.18, Math.max(1.5, h*0.12), 0, Math.PI*2); ctx.fill()
-}
-
 /* ===== main ===== */
 type ProgressCb = (xp:number, xpNeeded:number, level:number, leveledUp:boolean)=>void
 
@@ -159,8 +123,10 @@ export default function Game(
   const levelCfg = useRef(makeLevel(stage))
   const spawns = useRef(0)
 
-  // Phone thumbstick (left side), returns smoothed [-1..1] axes (numbers)
-  const { ax: touchAx, ay: touchAy } = useThumbstick(canvasRef, MODE.current === 'touch')
+  // Phone thumbstick (left side) — returns axis *refs* (no re-renders)
+const { axRef: touchAxRef, ayRef: touchAyRef } =
+  useThumbstick(canvasRef, MODE.current === 'touch')
+
 
   const player = useRef<PlayerState>({
     x: 140, y: 360, vx: 0, vy: 0,
@@ -280,8 +246,10 @@ export default function Game(
       if (xpGainPulse.current > 0) xpGainPulse.current -= 0.05*dt
 
       /* input resolve (touch uses thumbstick, desktop uses keyboard) */
-      const axEff = MODE.current === 'touch' ? touchAx : kbAx
-      const ayEff = MODE.current === 'touch' ? touchAy : kbAy
+    // input resolve (touch uses thumbstick, desktop uses keyboard)
+const axEff = MODE.current === 'touch' ? (touchAxRef.current || 0) : kbAx
+const ayEff = MODE.current === 'touch' ? (touchAyRef.current || 0) : kbAy
+
 
       /* critically-damped smoothing (framerate independent) */
       const targetVx = axEff * player.current.maxSpeed
@@ -616,6 +584,45 @@ export default function Game(
     }
   }
 
+  function roundCapsule(ctx:CanvasRenderingContext2D, x:number, y:number, w:number, h:number, r:number){
+    const rr = Math.min(r, h/2); ctx.beginPath(); ctx.moveTo(x+rr, y); ctx.lineTo(x+w-rr, y)
+    ctx.arc(x+w-rr, y+rr, rr, -Math.PI/2, Math.PI/2); ctx.lineTo(x+rr, y+h); ctx.arc(x+rr, y+rr, rr, Math.PI/2, -Math.PI/2); ctx.closePath()
+  }
+  function drawSeaDragon(ctx: CanvasRenderingContext2D, x:number, y:number, t:number){
+    ctx.save(); ctx.translate(x, y)
+    ctx.shadowColor = 'rgba(56,189,248,.8)'; ctx.shadowBlur = 24
+    const path = new Path2D()
+    path.moveTo(-100, 0)
+    for(let i=0;i<=12;i++){
+      const px = -100 + i*18
+      const py = Math.sin((i*0.6)+t)*18*(1 - i/14)
+      if(i===0) path.moveTo(px,py); else path.lineTo(px,py)
+    }
+    ctx.strokeStyle = 'rgba(59,130,246,.9)'; ctx.lineWidth = 16; ctx.lineCap='round'
+    ctx.stroke(path)
+    ctx.shadowBlur = 0
+    ctx.fillStyle = '#e0f2fe'
+    roundCapsule(ctx, 10, -18, 44, 36, 12); ctx.fill()
+    ctx.fillStyle = '#0b1220'; ctx.beginPath(); ctx.arc(46, -6, 3, 0, Math.PI*2); ctx.arc(46, 6, 3, 0, Math.PI*2); ctx.fill()
+    ctx.restore()
+  }
+  function drawSeaDragonBullet(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, vx: number, vy: number){
+    const ang = Math.atan2(vy || 0, Math.max(0.01, vx || 8))
+    ctx.save(); ctx.translate(x, y); ctx.rotate(ang)
+    const tail = ctx.createLinearGradient(-w*1.6, 0, w*0.5, 0)
+    tail.addColorStop(0, 'hsla(190, 90%, 65%, 0)'); tail.addColorStop(1, 'hsla(190, 95%, 72%, .55)')
+    ctx.fillStyle = tail; ctx.beginPath(); ctx.moveTo(-w*1.6, -h*0.35)
+    ctx.quadraticCurveTo(-w*0.7, 0, -w*1.6,  h*0.35); ctx.lineTo( w*0.45,  h*0.18); ctx.lineTo( w*0.45, -h*0.18); ctx.closePath(); ctx.fill()
+    ctx.shadowBlur = 14; ctx.shadowColor = 'hsl(195, 100%, 80%)'
+    const body = ctx.createLinearGradient(-w*0.4, 0, w*0.7, 0)
+    body.addColorStop(0, 'hsl(190, 95%, 72%)'); body.addColorStop(1, 'hsl(210, 90%, 88%)')
+    ctx.fillStyle = body; roundCapsule(ctx, -w*0.4, -h*0.5, w*1.1, h, Math.min(h*0.5, 8)); ctx.fill()
+    ctx.shadowBlur = 0; ctx.fillStyle = 'hsl(190, 95%, 70%)'
+    ctx.beginPath(); ctx.moveTo(-w*0.15, 0); ctx.lineTo(-w*0.45,  h*0.42); ctx.lineTo( w*0.05,   h*0.18); ctx.closePath(); ctx.fill()
+    ctx.fillStyle = '#0b1220'; ctx.beginPath(); ctx.arc(w*0.35, -h*0.18, Math.max(1.5, h*0.12), 0, Math.PI*2); ctx.fill()
+    ctx.restore()
+  }
+
   function draw(ctx:CanvasRenderingContext2D){
     const w=W.current,h=H.current
     const g=ctx.createLinearGradient(0,0,0,h)
@@ -663,7 +670,7 @@ export default function Game(
       if (mythic) {
         ctx.strokeStyle='rgba(250,204,21,.95)'; ctx.lineWidth=3
         ctx.beginPath(); ctx.arc(0,0,14+Math.sin(frame.current*0.16+pu.id)*2,0,Math.PI*2); ctx.stroke()
-        ctx.fillStyle='#fde047'; ctx.beginPath(); ctx.arc(0,0,10,0,Math.PI*2); ctx.fill()
+        ctx.fillStyle='#fde047'; ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.fill()
       } else if (!isBad) {
         const pearl = ctx.createRadialGradient(0, 0, 2, 0, 0, 12)
         pearl.addColorStop(0, '#ffffff'); pearl.addColorStop(1, '#facc15')
@@ -689,11 +696,9 @@ export default function Game(
         if (k==='jelly') {
           ctx.fillStyle='#67e8f9'
           roundCapsule(ctx,-16,-12,32,26,12); ctx.fill()
-          // eyes blink
           const blink = (ensureData(e).blink? 0.15 : 1)
           ctx.fillStyle='#0b1220'; ctx.beginPath()
           ctx.arc(-6,-4,3*blink,0,Math.PI*2); ctx.arc(6,-4,3*blink,0,Math.PI*2); ctx.fill()
-          // goofy smile
           ctx.strokeStyle='rgba(0,0,0,.5)'; ctx.beginPath(); ctx.arc(0,6,6,0,Math.PI); ctx.stroke()
         } else if (k==='squid') {
           ctx.fillStyle='#f472b6'
@@ -702,7 +707,6 @@ export default function Game(
         } else if (k==='manta') {
           ctx.fillStyle='#93c5fd'
           ctx.beginPath(); ctx.moveTo(-34,0); ctx.quadraticCurveTo(0,-24,34,0); ctx.quadraticCurveTo(0,14,-34,0); ctx.closePath(); ctx.fill()
-          // freckles
           ctx.fillStyle='rgba(0,0,0,.25)'; ctx.beginPath(); ctx.arc(-12,-6,1.5,0,Math.PI*2); ctx.arc(12,-6,1.5,0,Math.PI*2); ctx.fill()
         } else if (k==='nautilus') {
           ctx.fillStyle='#fbbf24'

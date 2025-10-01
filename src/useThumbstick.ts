@@ -1,93 +1,129 @@
-import { useEffect, useRef, useState, type RefObject } from 'react'
+// useThumbstick.ts
+import { useEffect, useRef } from 'react'
+import type { RefObject } from 'react'
 
-type Pt = { x:number; y:number }
-const clamp = (v:number, a:number, b:number) => Math.max(a, Math.min(b, v))
+type Pt = { x: number; y: number }
 
+/**
+ * Ultra-stable thumbstick for the left half of the canvas.
+ * Exposes refs so the game loop can read live values without re-renders.
+ *
+ * Usage in Game.tsx:
+ *   const { axRef: touchAxRef, ayRef: touchAyRef } =
+ *     useThumbstick(canvasRef, MODE.current === 'touch')
+ *   const ax = MODE.current === 'touch' ? (touchAxRef.current ?? 0) : kbAx
+ *   const ay = MODE.current === 'touch' ? (touchAyRef.current ?? 0) : kbAy
+ */
 export function useThumbstick(
-  canvasRef: RefObject<HTMLCanvasElement | null>, // <-- accept nullable ref
+  canvasRef: RefObject<HTMLCanvasElement | null>,
   enabled: boolean
 ) {
-  const [ax, setAx] = useState(0)
-  const [ay, setAy] = useState(0)
+  // live axes
+  const axRef = useRef(0)
+  const ayRef = useRef(0)
 
-  const idRef  = useRef<number | null>(null)
-  const origin = useRef<Pt>({x:0,y:0})
-  const cur    = useRef<Pt>({x:0,y:0})
-  const active = useRef(false)
-  const vx     = useRef(0)
-  const vy     = useRef(0)
+  // gesture state
+  const idRef = useRef<number | null>(null)
+  const originRef = useRef<Pt>({ x: 0, y: 0 })
 
-  const radius = 64, dead = 6, smooth = 0.22
-
-  // smoothing / easing loop
-  useEffect(() => {
-    let raf = 0, last = performance.now()
-    const loop = () => {
-      raf = requestAnimationFrame(loop)
-      const now = performance.now()
-      const dt  = Math.min(48, now - last) / 16.6667
-      last = now
-
-      let tx = 0, ty = 0
-      if (active.current) {
-        const dx = cur.current.x - origin.current.x
-        const dy = cur.current.y - origin.current.y
-        const len = Math.hypot(dx,dy)
-        const n = len < dead ? 0 : clamp((len - dead) / (radius - dead), 0, 1)
-        if (len > 0.0001) { tx = (dx/len)*n; ty = (dy/len)*n }
-      }
-
-      const k = 1 - Math.pow(1 - smooth, dt)
-      vx.current += (tx - vx.current) * k
-      vy.current += (ty - vy.current) * k
-
-      setAx(vx.current)
-      setAy(vy.current)
-    }
-    loop()
-    return () => cancelAnimationFrame(raf)
-  }, [])
-
-  // touch listeners
   useEffect(() => {
     const c = canvasRef.current
-    if (!c || !enabled) return
+    // reset if no canvas or disabled
+    if (!c || !enabled) {
+      axRef.current = 0
+      ayRef.current = 0
+      idRef.current = null
+      return
+    }
 
-    const local = (ev: Touch | MouseEvent) => {
+    const R = 110          // radius
+    const DZ = 12          // deadzone
+    const RECENTER = 0.28  // gentle origin recenter so thumb can drift
+
+    const local = (e: PointerEvent) => {
       const r = c.getBoundingClientRect()
-      return { x: ev.clientX - r.left, y: ev.clientY - r.top }
+      return { x: e.clientX - r.left, y: e.clientY - r.top }
     }
 
-    const start = (e: TouchEvent) => {
-      for (const t of Array.from(e.changedTouches)) {
-        const p = local(t)
-        if (p.x <= c.clientWidth * 0.5 && idRef.current === null) {
-          idRef.current = t.identifier
-          origin.current = p
-          cur.current    = p
-          active.current = true
-          break
-        }
-      }
+    const onDown = (e: PointerEvent) => {
+      // touch/pen only, left ~58% of canvas
+      if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return
+      if (idRef.current !== null) return
+      const p = local(e)
+      if (p.x > c.clientWidth * 0.58) return
+      idRef.current = e.pointerId
+      try { c.setPointerCapture(e.pointerId) } catch {}
+      originRef.current = p
+      axRef.current = 0
+      ayRef.current = 0
     }
-    const move = (e: TouchEvent) => {
-      for (const t of Array.from(e.changedTouches)) {
-        if (t.identifier === idRef.current) { cur.current = local(t); return }
-      }
-    }
-    const end = () => { idRef.current = null; active.current = false }
 
-    c.addEventListener('touchstart', start, { passive:true })
-    c.addEventListener('touchmove',  move,  { passive:true })
-    c.addEventListener('touchend',   end)
-    c.addEventListener('touchcancel',end)
+    const onMove = (e: PointerEvent) => {
+      if (idRef.current === null || e.pointerId !== idRef.current) return
+      // we registered pointermove with passive:false so this is allowed
+      if (e.pointerType === 'touch') e.preventDefault()
+
+      const p = local(e)
+      const dx = p.x - originRef.current.x
+      const dy = p.y - originRef.current.y
+      const len = Math.hypot(dx, dy)
+
+      // deadzone + easeOutCubic curve
+      let mag = 0
+      if (len > DZ) mag = Math.min(1, (len - DZ) / (R - DZ))
+      const curved = 1 - Math.pow(1 - mag, 3)
+      const nx = len > 0 ? (dx / len) * curved : 0
+      const ny = len > 0 ? (dy / len) * curved : 0
+
+      axRef.current = nx
+      ayRef.current = ny
+
+      // gentle origin recenter to accommodate thumb drift
+      if (len > R * 0.6) {
+        originRef.current.x += dx * RECENTER * 0.06
+        originRef.current.y += dy * RECENTER * 0.06
+      }
+    }
+
+    const endGesture = (pointerId: number) => {
+      if (idRef.current === null || pointerId !== idRef.current) return
+      try { c.releasePointerCapture(pointerId) } catch {}
+      idRef.current = null
+      axRef.current = 0
+      ayRef.current = 0
+    }
+
+    const onUp = (e: PointerEvent) => endGesture(e.pointerId)
+    const onCancel = (e: PointerEvent) => endGesture(e.pointerId)
+    const onLeaveWindow = () => {
+      // safety: if pointer is lost (tab switch, etc.)
+      if (idRef.current !== null) {
+        idRef.current = null
+        axRef.current = 0
+        ayRef.current = 0
+      }
+    }
+
+    c.addEventListener('pointerdown', onDown, { passive: true })
+    c.addEventListener('pointermove', onMove, { passive: false })
+    c.addEventListener('pointerup', onUp)
+    c.addEventListener('pointercancel', onCancel)
+    // extra safety if pointer capture is lost
+    c.addEventListener('lostpointercapture', onLeaveWindow)
+    window.addEventListener('blur', onLeaveWindow)
+
     return () => {
-      c.removeEventListener('touchstart', start)
-      c.removeEventListener('touchmove',  move)
-      c.removeEventListener('touchend',   end)
-      c.removeEventListener('touchcancel',end)
+      c.removeEventListener('pointerdown', onDown)
+      c.removeEventListener('pointermove', onMove)
+      c.removeEventListener('pointerup', onUp)
+      c.removeEventListener('pointercancel', onCancel)
+      c.removeEventListener('lostpointercapture', onLeaveWindow)
+      window.removeEventListener('blur', onLeaveWindow)
+      axRef.current = 0
+      ayRef.current = 0
+      idRef.current = null
     }
   }, [canvasRef, enabled])
 
-  return { ax, ay }
+  return { axRef, ayRef }
 }
