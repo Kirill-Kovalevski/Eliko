@@ -1,12 +1,12 @@
-/* Game.tsx — ultra-smooth split controls (touch vs desktop), funny sea-creatures, auto-aim, XP, buffs */
+/* Game.tsx — split controls (touch vs desktop), sea-creatures, auto-aim, XP, buffs */
 import { useEffect, useRef, useState } from 'react'
 import type { Entity, PlayerState, WeaponId, PowerUpKind } from './types'
 import { clamp, lerp, rnd, id, aabb } from './utils'
 import { useInput } from './useInput'
 import { useThumbstick } from './useThumbstick'
+import { useAimstick } from './useAimstick'
 import { synth } from './audio'
 import { makeLevel, STAGE_LENGTH } from './levels'
-
 
 /* ===== tiny utils ===== */
 const num = (v: any, d = 0) => { const n = Number(v); return Number.isFinite(n) ? n : d }
@@ -14,7 +14,6 @@ const flag = (v: any) => v === true
 const text = (v: any, d = '') => (typeof v === 'string' ? v : d)
 const ensureData = <T extends { data?: Record<string, any> }>(o: T) => (o.data ??= {} as Record<string, any>)
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
-
 
 /* ===== input mode detection ===== */
 function detectMode(): 'touch'|'desktop' {
@@ -48,7 +47,6 @@ const asEnemyKind = (x: unknown): EnemyKind => {
   const bag = ['jelly','squid','manta','nautilus','puffer','crab','siren']
   return (bag as readonly string[]).includes(String(x)) ? (x as EnemyKind) : 'jelly'
 }
-
 
 /* ===== entities ===== */
 function bullet(x:number,y:number,w:number,h:number,vx:number,vy:number,kind:WeaponId|string,data:Record<string,unknown>={}):Entity{
@@ -123,17 +121,21 @@ export default function Game(
   const levelCfg = useRef(makeLevel(stage))
   const spawns = useRef(0)
 
-  // Phone thumbstick (left side) — returns axis *refs* (no re-renders)
-const { axRef: touchAxRef, ayRef: touchAyRef } =
-  useThumbstick(canvasRef, MODE.current === 'touch')
+  // Phone thumbsticks:
+  // - left: movement (axRef/ayRef)
+  // - right: aim + fire (axRef/ayRef + firingRef)
+  const { axRef: moveAxRef, ayRef: moveAyRef } =
+    useThumbstick(canvasRef, MODE.current === 'touch')
 
+  const { axRef: aimAxRef, ayRef: aimAyRef, firingRef: fireRef } =
+    useAimstick(canvasRef, MODE.current === 'touch')
 
+  // player + progression
   const player = useRef<PlayerState>({
     x: 140, y: 360, vx: 0, vy: 0,
-    maxSpeed: MODE.current === 'touch' ? 6.4 : 8.8,  // <- tune here
+    maxSpeed: MODE.current === 'touch' ? 6.4 : 8.8,  // tuned per device
     radius: BASE_R, hp: 6, shieldMs: 0, weapon: 'blaster'
   })
-
   const targetRadius = useRef(BASE_R)
   const weaponLevel = useRef(0)
 
@@ -245,11 +247,9 @@ const { axRef: touchAxRef, ayRef: touchAyRef } =
       if(dmgBounce.current>0) dmgBounce.current=Math.max(0,dmgBounce.current-0.08*dt)
       if (xpGainPulse.current > 0) xpGainPulse.current -= 0.05*dt
 
-      /* input resolve (touch uses thumbstick, desktop uses keyboard) */
-    // input resolve (touch uses thumbstick, desktop uses keyboard)
-const axEff = MODE.current === 'touch' ? (touchAxRef.current || 0) : kbAx
-const ayEff = MODE.current === 'touch' ? (touchAyRef.current || 0) : kbAy
-
+      /* input resolve (touch uses left thumbstick, desktop uses keyboard; no mouse) */
+      const axEff = MODE.current === 'touch' ? (moveAxRef.current || 0) : kbAx
+      const ayEff = MODE.current === 'touch' ? (moveAyRef.current || 0) : kbAy
 
       /* critically-damped smoothing (framerate independent) */
       const targetVx = axEff * player.current.maxSpeed
@@ -267,28 +267,46 @@ const ayEff = MODE.current === 'touch' ? (touchAyRef.current || 0) : kbAy
       if(player.current.shieldMs>0) player.current.shieldMs-=16*dt
       if(shake.current>0) shake.current=Math.max(0,shake.current-0.8*dt)
 
-      /* auto-aim: nearest enemy (fallback to move dir) */
-      let nearest: Entity | null = null, best = 1e9
-      for (const e of enemiesRef.current) {
-        if (flag(e.data?.bullet)) continue
-        const dx = e.x - player.current.x, dy = e.y - player.current.y
-        const d2 = dx*dx+dy*dy
-        if (d2 < best) { best = d2; nearest = e }
+      /* aim resolution:
+         - touch: right-stick direction wins when magnitude > threshold
+         - fallback: nearest enemy or movement direction
+      */
+      let aimOverridden = false
+      if (MODE.current === 'touch') {
+        const ax = aimAxRef.current || 0
+        const ay = aimAyRef.current || 0
+        const mag = Math.hypot(ax, ay)
+        if (mag > 0.12) {
+          aimAngle.current = Math.atan2(ay, ax)
+          aimOverridden = true
+        }
       }
-      if (nearest) {
-        aimAngle.current = Math.atan2(nearest.y - player.current.y, nearest.x - player.current.x)
-      } else {
-        const mv = Math.hypot(player.current.vx, player.current.vy)
-        if (mv>0.1) aimAngle.current = Math.atan2(player.current.vy, player.current.vx)
+      if (!aimOverridden) {
+        let nearest: Entity | null = null, best = 1e9
+        for (const e of enemiesRef.current) {
+          if (flag(e.data?.bullet)) continue
+          const dx = e.x - player.current.x, dy = e.y - player.current.y
+          const d2 = dx*dx+dy*dy
+          if (d2 < best) { best = d2; nearest = e }
+        }
+        if (nearest) {
+          aimAngle.current = Math.atan2(nearest.y - player.current.y, nearest.x - player.current.x)
+        } else {
+          const mv = Math.hypot(player.current.vx, player.current.vy)
+          if (mv>0.1) aimAngle.current = Math.atan2(player.current.vy, player.current.vx)
+        }
       }
 
-      /* fire rules: phone = autofire; desktop = Space bar */
+      /* fire rules:
+         - touch: fires ONLY while right thumb is down
+         - desktop: Space bar
+      */
       const weaponId=WEAPON_TIER[Math.min(weaponLevel.current,WEAPON_TIER.length-1)]
       player.current.weapon=weaponId
       const config=WEAPONS[weaponId]
       const gapBoost=rapidMs.current>0?0.65:1
       const effectiveGap=Math.max(4,Math.floor(config.gap*gapBoost))
-      const wantFire = MODE.current==='touch' ? true : !!fire
+      const wantFire = MODE.current==='touch' ? !!fireRef.current : !!fire
 
       if(wantFire && frame.current-lastFire.current>effectiveGap*ts){
         for(const b of config.onFire(player.current, aimAngle.current)) bulletsRef.current.push(b)
@@ -584,6 +602,7 @@ const ayEff = MODE.current === 'touch' ? (touchAyRef.current || 0) : kbAy
     }
   }
 
+  /* ===== visuals ===== */
   function roundCapsule(ctx:CanvasRenderingContext2D, x:number, y:number, w:number, h:number, r:number){
     const rr = Math.min(r, h/2); ctx.beginPath(); ctx.moveTo(x+rr, y); ctx.lineTo(x+w-rr, y)
     ctx.arc(x+w-rr, y+rr, rr, -Math.PI/2, Math.PI/2); ctx.lineTo(x+rr, y+h); ctx.arc(x+rr, y+rr, rr, Math.PI/2, -Math.PI/2); ctx.closePath()
